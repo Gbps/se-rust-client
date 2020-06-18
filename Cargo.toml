@@ -1,0 +1,11 @@
+[package]
+name = "se-client"
+version = "0.1.0"
+authors = ["Michael <gbps@ctf.re>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.31"
+enum_dispatch = "0.3.1"

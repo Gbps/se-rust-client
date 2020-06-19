@@ -1,6 +1,9 @@
 #[macro_use]
 extern crate enum_dispatch;
 
+#[macro_use]
+extern crate num_derive;
+
 mod source;
 use source::ConnectionlessChannel;
 use source::packets::*;
@@ -19,12 +22,31 @@ fn run() -> anyhow::Result<()>
     let mut stream = ConnectionlessChannel::new(socket)?;
 
     // request server info
-    let packet = A2sInfo{};
+    let packet = A2sInfo::default();
+    dbg!(&packet);
     stream.send_packet(packet.into())?;
 
     // receive server info response
-    let _res = stream.recv_packet()?;
-    dbg!(_res);
+    let _res: S2aInfoSrc = stream.recv_packet_type()?;
+    dbg!(&_res);
+
+    // request challenge
+    let packet = A2sGetChallenge::default();
+    dbg!(&packet);
+    stream.send_packet(packet.into())?;
+
+    // receive challenge response
+    let _res: S2cChallenge = stream.recv_packet_type()?;
+    dbg!(&_res);
+
+    // verify the challenge
+    let packet = A2sGetChallenge::with_challenge(_res.challenge_num);
+    dbg!(&packet);
+    stream.send_packet(packet.into())?;
+
+    // ensure we have successfully verified the challenge
+    let _res: S2cChallenge = stream.recv_packet_type()?;
+    dbg!(&_res);
 
     Ok(())
 }

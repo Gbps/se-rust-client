@@ -2,7 +2,6 @@ use std::net::UdpSocket;
 use std::io::{BufRead, Write};
 use anyhow::{Result, Context};
 use super::packetbase::*;
-use super::packets::*;
 
 // implements a buffered udp reader
 pub struct BufUdp
@@ -98,8 +97,9 @@ impl ConnectionlessChannel
         pkt.serialize_to_channel(&mut self.wrapper)
     }
 
-    // read a connectionless packet from the socket
-    pub fn recv_packet(&mut self) -> Result<ConnectionlessPacket>
+    // read the header from the stream, returns the type of packet and the new position of the
+    // message slice
+    fn recv_header(&mut self) -> Result<(ConnectionlessPacketType, &[u8])>
     {
         // read the message
         let mut target = self.wrapper.recv_message()?;
@@ -112,14 +112,38 @@ impl ConnectionlessChannel
         }
 
         // read the type number and convert it to a packet type enum
-        let packet_type = ConnectionlessPacketType::from(target.read_char()?);
+        Ok((ConnectionlessPacketType::from(target.read_char()?), target))
+    }
+/*
+    // read any generic connectionless packet from the socket
+    pub fn recv_packet(&mut self) -> Result<ConnectionlessPacket>
+    {
+        // read the type number and convert it to a packet type enum
+        let (packet_type, target) = self.recv_header()?;
 
         // construct a packet object based on the packet type
         match packet_type
         {
             ConnectionlessPacketType::S2A_INFO_SRC => Ok(S2aInfoSrc::read_values(target)?.into()),
-            _ => panic!("should never happen")
+            ConnectionlessPacketType::S2A_CHALLENGE => Ok(S2aChallenge::read_values(target)?.into()),
+            _ => panic!(format!("no read_values() match implemented for packet {}", packet_type as u8))
         }
+    }
+*/
+    // read a specific connectionless packet from the socket
+    pub fn recv_packet_type<T>(&mut self) -> Result<T>
+        where T: ConnectionlessPacketReceive
+    {
+        // read the type number and convert it to a packet type enum
+        let (packet_type, target) = self.recv_header()?;
+
+        if packet_type != T::get_type()
+        {
+            return Err(anyhow::anyhow!(format!("Expected packet {:?}, got {:?}", T::get_type(), packet_type)))
+        }
+
+        // read the packet from the wire
+        Ok(T::read_values(target)?)
     }
 }
 
@@ -170,6 +194,7 @@ impl<T> ByteWriter for T
 pub trait ByteReader
 {
     fn read_long(&mut self) -> Result<u32>;
+    fn read_longlong(&mut self) -> Result<u64>;
     fn read_word(&mut self) -> Result<u16>;
     fn read_char(&mut self) -> Result<u8>;
     fn read_string(&mut self) -> Result<String>;
@@ -190,6 +215,20 @@ impl<T> ByteReader for T
 
         // convert to little endian long
         Ok(u32::from_le_bytes(buf))
+    }
+
+    // read a little endian longlong from the stream
+    #[inline]
+    fn read_longlong(&mut self) -> Result<u64>
+    {
+        // 4 byte buffer space
+        let mut buf:[u8; 8] = [0; 8];
+
+        // read exactly 4 bytes from stream
+        self.read_exact(&mut buf)?;
+
+        // convert to little endian long
+        Ok(u64::from_le_bytes(buf))
     }
 
     // read a little endian long from the stream

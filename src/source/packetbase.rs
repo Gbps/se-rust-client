@@ -4,7 +4,7 @@ use super::packets::*;
 
 #[allow(non_camel_case_types)]
 #[repr(u8)]
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ConnectionlessPacketType
 {
     Invalid = 0 as u8,
@@ -12,6 +12,8 @@ pub enum ConnectionlessPacketType
     A2A_PING = 105 as u8,
     A2S_INFO = 84 as u8,
     S2A_INFO_SRC = 73 as u8,
+    A2S_GETCHALLENGE = 113 as u8,
+    S2C_CHALLENGE = 65 as u8
 }
 
 impl From<u8> for ConnectionlessPacketType
@@ -24,6 +26,8 @@ impl From<u8> for ConnectionlessPacketType
             105 => ConnectionlessPacketType::A2A_PING,
             84 => ConnectionlessPacketType::A2S_INFO,
             73 => ConnectionlessPacketType::S2A_INFO_SRC,
+            113 => ConnectionlessPacketType::A2S_GETCHALLENGE,
+            65 => ConnectionlessPacketType::S2C_CHALLENGE,
             _ => ConnectionlessPacketType::Invalid
         }
     }
@@ -38,7 +42,9 @@ pub enum ConnectionlessPacket
     A2aAck,
     A2aPing,
     A2sInfo,
-    S2aInfoSrc
+    S2aInfoSrc,
+    A2sGetChallenge,
+    S2aChallenge
 }
 
 impl ConnectionlessPacket
@@ -52,6 +58,8 @@ impl ConnectionlessPacket
             ConnectionlessPacket::A2aPing(_) => ConnectionlessPacketType::A2A_PING,
             ConnectionlessPacket::A2sInfo(_) => ConnectionlessPacketType::A2S_INFO,
             ConnectionlessPacket::S2aInfoSrc(_) => ConnectionlessPacketType::S2A_INFO_SRC,
+            ConnectionlessPacket::A2sGetChallenge(_) => ConnectionlessPacketType::A2S_GETCHALLENGE,
+            ConnectionlessPacket::S2aChallenge(_) => ConnectionlessPacketType::S2C_CHALLENGE,
         }
     }
 
@@ -99,5 +107,18 @@ pub trait ConnectionlessPacketTrait
     {
         // to be overridden
         Ok(())
+    }
+}
+
+// A packet we are allowed to receive from the network
+pub trait ConnectionlessPacketReceive: Sized
+{
+    fn get_type() -> ConnectionlessPacketType;
+
+    // serialize extra packet information
+    fn read_values(mut _packet: &[u8]) -> Result<Self>
+    {
+        // to be overridden
+        Err(anyhow::anyhow!("read_values unimplemented"))
     }
 }

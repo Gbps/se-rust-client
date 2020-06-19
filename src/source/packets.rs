@@ -1,7 +1,11 @@
 use super::packetbase::ConnectionlessPacketTrait;
+use super::packetbase::ConnectionlessPacketReceive;
+
 use anyhow::Result;
 use super::channel::ByteWriter;
 use super::channel::ByteReader;
+use num_traits::FromPrimitive;
+use crate::source::ConnectionlessPacketType;
 
 #[derive(Debug)]
 pub struct A2aAck {}
@@ -15,7 +19,7 @@ impl ConnectionlessPacketTrait for A2aPing
 {
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct A2sInfo {}
 impl ConnectionlessPacketTrait for A2sInfo
 {
@@ -49,9 +53,14 @@ impl ConnectionlessPacketTrait for S2aInfoSrc
 {
 }
 
-impl S2aInfoSrc
+impl ConnectionlessPacketReceive for S2aInfoSrc
 {
-    pub fn read_values(mut packet: &[u8]) -> Result<S2aInfoSrc>
+    fn get_type() -> ConnectionlessPacketType
+    {
+        ConnectionlessPacketType::S2A_INFO_SRC
+    }
+
+    fn read_values(mut packet: &[u8]) -> Result<S2aInfoSrc>
     {
         Ok(S2aInfoSrc{
             protocol_num: packet.read_char()?,
@@ -69,5 +78,113 @@ impl S2aInfoSrc
             is_secure: packet.read_char()?,
             host_version_string: packet.read_string()?,
         })
+    }
+}
+
+// client requests challenge with server
+#[derive(Debug)]
+pub struct A2sGetChallenge
+{
+    // the "type" of challenge
+    // normally in the form of "connect0xAABBCCDD"
+    // where "connect0x00000000" is a perfectly valid conection string
+    connect_string: String
+}
+impl ConnectionlessPacketTrait for A2sGetChallenge
+{
+    fn serialize_values(&self, target: &mut dyn ByteWriter) -> Result<()>
+    {
+        // write other header info
+        target.write_string(&self.connect_string)?;
+
+        Ok(())
+    }
+}
+
+impl Default for A2sGetChallenge
+{
+    // set the default challenge connect string
+    fn default() -> A2sGetChallenge
+    {
+        A2sGetChallenge{
+            connect_string: String::from("connect0x00000000")
+        }
+    }
+}
+
+impl A2sGetChallenge
+{
+    // create a challenge for a specific cookie
+    pub fn with_challenge(cookie_value: u32) -> A2sGetChallenge
+    {
+        A2sGetChallenge {
+            connect_string: format!("connect{:#010x}", cookie_value)
+        }
+    }
+}
+
+#[derive(FromPrimitive, ToPrimitive, Debug)]
+#[allow(non_camel_case_types)]
+#[repr(u32)]
+pub enum AuthProtocolType
+{
+    PROTOCOL_UNUSED = 0x01, // unused
+    PROTOCOL_HASHEDCDKEY = 0x02, // only for misconfigured listen servers
+    PROTOCOL_STEAM =	0x03,	// auth with steam, default
+}
+
+// server responds to challenge with additional server info
+#[derive(Debug)]
+pub struct S2cChallenge
+{
+    pub challenge_num: u32, // randomly generated challenge for this client
+    pub auth_protocol: AuthProtocolType, // PROTOCOL_STEAM only
+    pub steam2_encryption_enabled: u16, // 0 nowadays
+    pub gameserver_steamid: u64, // gameserver's steamid
+    pub vac_secured: u8, // 0 or 1
+    pub context_response: String, // should be "connect0x...." on success, otherwise "connect-retry"
+    pub host_version: u32, //server host version
+    pub lobby_type: String, // "", "friends", or "public"
+    pub password_required: u8, // 1 if password is required to connect
+    pub lobby_id: u64, // -1 unless lobby matching is used
+    pub friends_required: u8, // 0, unless lobby matching is used
+    pub valve_ds: u8, // 1 if this is a valve hosted dedicated server
+    pub require_certificate: u8, // 0, unless certificate authentication is used
+    /* TODO: Certificate Authentication */
+}
+impl ConnectionlessPacketTrait for S2cChallenge {}
+impl ConnectionlessPacketReceive for S2cChallenge
+{
+    fn get_type() -> ConnectionlessPacketType
+    {
+        ConnectionlessPacketType::S2C_CHALLENGE
+    }
+
+    fn read_values(mut packet: &[u8]) -> Result<S2cChallenge>
+    {
+        Ok(S2cChallenge {
+            challenge_num: packet.read_long()?,
+            auth_protocol: FromPrimitive::from_u32(packet.read_long()?).ok_or(anyhow::anyhow!("Invalid auth protocol"))?,
+            steam2_encryption_enabled: packet.read_word()?,
+            gameserver_steamid: packet.read_longlong()?,
+            vac_secured: packet.read_char()?,
+            context_response: packet.read_string()?,
+            host_version: packet.read_long()?,
+            lobby_type: packet.read_string()?,
+            password_required: packet.read_char()?,
+            lobby_id: packet.read_longlong()?,
+            friends_required: packet.read_char()?,
+            valve_ds: packet.read_char()?,
+            require_certificate: packet.read_char()?,
+        })
+    }
+}
+
+impl S2cChallenge
+{
+    // if true, the client should retry with the given cookie value
+    pub fn should_retry(&self) -> bool
+    {
+        &self.context_response == "connect-retry"
     }
 }

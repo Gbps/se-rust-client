@@ -1,6 +1,7 @@
 use super::channel::*;
 use anyhow::Result;
 use super::packets::*;
+use super::bitbuf::*;
 
 #[allow(non_camel_case_types)]
 #[repr(u8)]
@@ -44,7 +45,7 @@ pub enum ConnectionlessPacket
     A2sInfo,
     S2aInfoSrc,
     A2sGetChallenge,
-    S2aChallenge
+    S2cChallenge
 }
 
 impl ConnectionlessPacket
@@ -59,12 +60,12 @@ impl ConnectionlessPacket
             ConnectionlessPacket::A2sInfo(_) => ConnectionlessPacketType::A2S_INFO,
             ConnectionlessPacket::S2aInfoSrc(_) => ConnectionlessPacketType::S2A_INFO_SRC,
             ConnectionlessPacket::A2sGetChallenge(_) => ConnectionlessPacketType::A2S_GETCHALLENGE,
-            ConnectionlessPacket::S2aChallenge(_) => ConnectionlessPacketType::S2C_CHALLENGE,
+            ConnectionlessPacket::S2cChallenge(_) => ConnectionlessPacketType::S2C_CHALLENGE,
         }
     }
 
     // serialize the packet to a byte array
-    fn serialize_header(&self, target: &mut dyn ByteWriter) -> Result<()>
+    fn serialize_header(&self, target: &mut BitBufWriterType) -> Result<()>
     {
         // SE determines netchannel vs. connectionless by the header
         target.write_long(CONNECTIONLESS_HEADER)?;
@@ -79,15 +80,18 @@ impl ConnectionlessPacket
     pub fn serialize_to_channel(&self, target: &mut BufUdp) -> Result<()>
     {
         {
-            // scratch space to serialize packet
-            let scratch = target.get_scratch_mut();
+            let scratch_space = target.get_scratch_mut();
 
             // reset length ptr
-            scratch.clear();
+            scratch_space.clear();
+
+            // scratch space to serialize packet
+            let mut scratch: BitBufWriterType = BitWriter::endian(std::io::Cursor::new(scratch_space), LittleEndian);
+
 
             // serialize to scratch space
-            self.serialize_header(scratch)?;
-            self.serialize_values(scratch)?;
+            self.serialize_header(&mut scratch)?;
+            self.serialize_values(&mut scratch)?;
         }
 
         // send over channel
@@ -103,7 +107,7 @@ pub const CONNECTIONLESS_HEADER: u32 = 0xFFFFFFFF;
 pub trait ConnectionlessPacketTrait
 {
     // serialize extra packet information
-    fn serialize_values(&self, _target: &mut dyn ByteWriter) -> Result<()>
+    fn serialize_values(&self, _target: &mut BitBufWriterType) -> Result<()>
     {
         // to be overridden
         Ok(())
@@ -116,9 +120,5 @@ pub trait ConnectionlessPacketReceive: Sized
     fn get_type() -> ConnectionlessPacketType;
 
     // serialize extra packet information
-    fn read_values(mut _packet: &[u8]) -> Result<Self>
-    {
-        // to be overridden
-        Err(anyhow::anyhow!("read_values unimplemented"))
-    }
+    fn read_values(packet: &mut BitBufReaderType) -> Result<Self>;
 }

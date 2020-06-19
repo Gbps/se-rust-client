@@ -2,10 +2,9 @@ use super::packetbase::ConnectionlessPacketTrait;
 use super::packetbase::ConnectionlessPacketReceive;
 
 use anyhow::Result;
-use super::channel::ByteWriter;
-use super::channel::ByteReader;
 use num_traits::FromPrimitive;
 use crate::source::ConnectionlessPacketType;
+use super::bitbuf::*;
 
 #[derive(Debug)]
 pub struct A2aAck {}
@@ -23,7 +22,7 @@ impl ConnectionlessPacketTrait for A2aPing
 pub struct A2sInfo {}
 impl ConnectionlessPacketTrait for A2sInfo
 {
-    fn serialize_values(&self, target: &mut dyn ByteWriter) -> Result<()>
+    fn serialize_values(&self, target: &mut BitBufWriterType) -> Result<()>
     {
         // write other header info
         target.write_string("Source Engine Query")?;
@@ -60,7 +59,7 @@ impl ConnectionlessPacketReceive for S2aInfoSrc
         ConnectionlessPacketType::S2A_INFO_SRC
     }
 
-    fn read_values(mut packet: &[u8]) -> Result<S2aInfoSrc>
+    fn read_values(packet: &mut BitBufReaderType) -> Result<S2aInfoSrc>
     {
         Ok(S2aInfoSrc{
             protocol_num: packet.read_char()?,
@@ -92,7 +91,7 @@ pub struct A2sGetChallenge
 }
 impl ConnectionlessPacketTrait for A2sGetChallenge
 {
-    fn serialize_values(&self, target: &mut dyn ByteWriter) -> Result<()>
+    fn serialize_values(&self, target: &mut BitBufWriterType) -> Result<()>
     {
         // write other header info
         target.write_string(&self.connect_string)?;
@@ -160,7 +159,7 @@ impl ConnectionlessPacketReceive for S2cChallenge
         ConnectionlessPacketType::S2C_CHALLENGE
     }
 
-    fn read_values(mut packet: &[u8]) -> Result<S2cChallenge>
+    fn read_values(packet: &mut BitBufReaderType) -> Result<S2cChallenge>
     {
         Ok(S2cChallenge {
             challenge_num: packet.read_long()?,

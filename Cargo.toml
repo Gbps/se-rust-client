@@ -9,9 +9,12 @@ edition = "2018"
 protoc-rust = "2.0"
 
 [dependencies]
+csgogcprotos = {git = "https://github.com/Gbps/csgogcprotos-rs"}
 anyhow = "1.0.31"
 enum_dispatch = "0.3.1"
 num-traits = "0.2"
 num-derive = "0.3"
 protobuf = { version = "2", features = ["with-bytes"] }
 bitstream-io = "0.8.5"
+libc = "0.2"
+steamworks = {git = "https://github.com/Gbps/steamworks-rs.git"}

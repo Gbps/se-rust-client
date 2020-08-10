@@ -92,7 +92,6 @@ impl ConnectionlessPacket
             // scratch space to serialize packet
             let mut scratch: BitBufWriterType = BitWriter::endian(std::io::Cursor::new(scratch_space), LittleEndian);
 
-
             // serialize to scratch space
             self.serialize_header(&mut scratch)?;
             self.serialize_values(&mut scratch)?;

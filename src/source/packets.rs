@@ -187,7 +187,7 @@ impl S2cChallenge
     // if true, the client should retry with the given cookie value
     pub fn should_retry(&self) -> bool
     {
-        &self.context_response == "connect-retry"
+        self.context_response == "connect-retry"
     }
 }
 

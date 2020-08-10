@@ -2,9 +2,12 @@ use super::packetbase::ConnectionlessPacketTrait;
 use super::packetbase::ConnectionlessPacketReceive;
 
 use anyhow::Result;
-use num_traits::FromPrimitive;
+use num_traits::{FromPrimitive, ToPrimitive};
 use crate::source::ConnectionlessPacketType;
 use super::bitbuf::*;
+
+use super::protos::CCLCMsg_SplitPlayerConnect;
+use protobuf::Message;
 
 #[derive(Debug)]
 pub struct A2aAck {}
@@ -185,5 +188,77 @@ impl S2cChallenge
     pub fn should_retry(&self) -> bool
     {
         &self.context_response == "connect-retry"
+    }
+}
+
+#[derive(FromPrimitive, ToPrimitive, Debug)]
+pub enum CrossplayPlatform
+{
+    Unknown,
+    Pc,
+    X360,
+    Ps3
+}
+
+#[derive(Debug)]
+pub struct SteamAuthInfo
+{
+    pub size: u16,
+    pub steamid: u64,
+    pub auth_ticket: Vec<u8>,
+    pub size_of_ticket: u64
+}
+
+#[derive(Debug)]
+pub struct C2sConnect
+{
+    pub host_version: u32,
+    pub auth_protocol: AuthProtocolType,
+    pub challenge_num: u32,
+    pub player_name: String,
+    pub server_password: String,
+    pub num_players: u8,
+    pub split_player_connect: CCLCMsg_SplitPlayerConnect,
+    pub low_violence: bool,
+    pub lobby_cookie: u64,
+    pub crossplay_platform: CrossplayPlatform,
+    pub cert_encryption: u32,
+    pub auth_info: SteamAuthInfo,
+}
+impl ConnectionlessPacketTrait for C2sConnect
+{
+    fn serialize_values(&self, target: &mut BitBufWriterType) -> Result<()>
+    {
+        // write fields
+        target.write_long(self.host_version)?;
+        target.write_long(ToPrimitive::to_u32(&self.auth_protocol).ok_or(anyhow::anyhow!("Invalid auth protocol"))?)?;
+        target.write_long(self.challenge_num)?;
+        target.write_string(&self.player_name)?;
+        target.write_string(&self.server_password)?;
+        target.write_char(self.num_players)?;
+
+        // encode protobuf
+        {
+            // netmessage number, not used
+            target.write_int32_var(0)?;
+
+            let encoded = self.split_player_connect.write_to_bytes()?;
+            target.write_int32_var(encoded.len() as u32)?;
+            target.write_bytes(&encoded)?;
+        }
+
+        // more fields
+        target.write_bit(self.low_violence)?;
+        target.write_longlong(self.lobby_cookie)?;
+        target.write_char(ToPrimitive::to_u8(&self.crossplay_platform).ok_or(anyhow::anyhow!("Invalid crossplay platform"))?)?;
+        target.write_long(self.cert_encryption)?;
+
+        // auth info fields
+        target.write_word(self.auth_info.size)?;
+        target.write_longlong(self.auth_info.steamid)?;
+        target.write_bytes(&self.auth_info.auth_ticket)?;
+        target.write_longlong(self.auth_info.size_of_ticket)?;
+
+        Ok(())
     }
 }

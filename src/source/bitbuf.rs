@@ -1,5 +1,5 @@
 pub use bitstream_io::{LittleEndian, BitReader, BitWriter};
-use anyhow::{Result, Context};
+use anyhow::{Result};
 
 // A bit buffer reader which reads bits in little endian
 // Used for reading messages from a stream since some netmessages are bit-based
@@ -83,8 +83,12 @@ impl<T> WireReader for BitReader<T, LittleEndian>
 pub trait WireWriter
 {
     fn write_long(&mut self, num: u32) -> Result<()>;
+    fn write_longlong(&mut self, num: u64) -> Result<()>;
+    fn write_word(&mut self, num: u16) -> Result<()>;
     fn write_char(&mut self, num: u8) -> Result<()>;
     fn write_string(&mut self, s: &str) -> Result<()>;
+    fn write_bit(&mut self, bit: bool) -> Result<()>;
+    fn write_int32_var(&mut self, num: u32) -> Result<()>;
 }
 
 impl<T> WireWriter for BitWriter<T, LittleEndian>
@@ -99,6 +103,24 @@ impl<T> WireWriter for BitWriter<T, LittleEndian>
         Ok(())
     }
 
+    // write little endian 64-bit longlong
+    #[inline]
+    fn write_longlong(&mut self, num: u64) -> Result<()>
+    {
+        self.write(64, num)?;
+
+        Ok(())
+    }
+
+    #[inline]
+    fn write_word(&mut self, num: u16) -> Result<()>
+    {
+        self.write(16, num)?;
+
+        Ok(())
+    }
+
+
     // write char
     #[inline]
     fn write_char(&mut self, num: u8) -> Result<()>
@@ -112,12 +134,35 @@ impl<T> WireWriter for BitWriter<T, LittleEndian>
     #[inline]
     fn write_string(&mut self, s: &str) -> Result<()>
     {
-        // write string and null terminator
-        self.write_bytes(s.as_bytes())?;
+        if s.len() > 0
+        {
+            // write string and null terminator
+            self.write_bytes(s.as_bytes())?;
+        }
 
         // write a null byte
         self.write(8, 0)?;
 
+        Ok(())
+    }
+
+
+    #[inline]
+    fn write_bit(&mut self, bit: bool) -> Result<()>
+    {
+        Ok(self.write_bit(bit)?)
+    }
+
+    // source engine variable length 32-bit int encoding
+    #[inline]
+    fn write_int32_var(&mut self, mut data: u32) -> Result<()>
+    {
+        while data > 0x7F
+        {
+            self.write(8,  (data & 0x7F) | 0x80)?;
+            data >>= 7;
+        }
+        self.write(8, data & 0x7F)?;
         Ok(())
     }
 }

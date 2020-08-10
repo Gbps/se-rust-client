@@ -14,7 +14,8 @@ pub enum ConnectionlessPacketType
     A2S_INFO = 84 as u8,
     S2A_INFO_SRC = 73 as u8,
     A2S_GETCHALLENGE = 113 as u8,
-    S2C_CHALLENGE = 65 as u8
+    S2C_CHALLENGE = 65 as u8,
+    C2S_CONNECT = 107 as u8,
 }
 
 impl From<u8> for ConnectionlessPacketType
@@ -29,6 +30,7 @@ impl From<u8> for ConnectionlessPacketType
             73 => ConnectionlessPacketType::S2A_INFO_SRC,
             113 => ConnectionlessPacketType::A2S_GETCHALLENGE,
             65 => ConnectionlessPacketType::S2C_CHALLENGE,
+            107 => ConnectionlessPacketType::C2S_CONNECT,
             _ => ConnectionlessPacketType::Invalid
         }
     }
@@ -45,7 +47,8 @@ pub enum ConnectionlessPacket
     A2sInfo,
     S2aInfoSrc,
     A2sGetChallenge,
-    S2cChallenge
+    S2cChallenge,
+    C2sConnect,
 }
 
 impl ConnectionlessPacket
@@ -61,6 +64,7 @@ impl ConnectionlessPacket
             ConnectionlessPacket::S2aInfoSrc(_) => ConnectionlessPacketType::S2A_INFO_SRC,
             ConnectionlessPacket::A2sGetChallenge(_) => ConnectionlessPacketType::A2S_GETCHALLENGE,
             ConnectionlessPacket::S2cChallenge(_) => ConnectionlessPacketType::S2C_CHALLENGE,
+            ConnectionlessPacket::C2sConnect(_) => ConnectionlessPacketType::C2S_CONNECT,
         }
     }
 

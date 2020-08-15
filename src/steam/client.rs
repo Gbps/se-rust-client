@@ -128,6 +128,29 @@ impl SteamClient {
         )
     }
 
+    /// Helper function which performs a protobuf request to the game coordinator and waits on a response for a duration.
+    /// When the response is received, calls `callback` with the decoded results of the packet.
+    ///
+    /// # Arguments
+    ///
+    /// * `to_send_type` - The packet enum value for the request being sent
+    /// * `to_send`      - The `protobuf::Message` structure for the packet being sent
+    /// * `to_recv_type` - The packet enum value for the response packet
+    /// * `timeout`      - A timeout duration before the call fails and returns Err
+    /// * `callback`     - A callback which is executed in a separate thread when the response packet is received.
+    ///                    The first argument is a protobuf type specified by `RecvMsgType` of message id `to_recv_type`.
+    /// # Example
+    /// ```
+    ///         self.do_request::<CMsgGCCStrike15_v2_ClientRequestJoinServerData, _, _>(
+    ///             ECsgoGCMsg::k_EMsgGCCStrike15_v2_ClientRequestJoinServerData as u32,
+    ///             msg,
+    ///             ECsgoGCMsg::k_EMsgGCCStrike15_v2_ClientRequestJoinServerData as u32,
+    ///             Duration::from_millis(1000),
+    ///             move |pkt| {
+    ///                println!("Received packet!");
+    ///             }
+    ///         )?;
+    /// ```
     fn do_request<RecvMsgType, CbProto, SendMsgType>(
         &self,
         to_send_type: u32,
@@ -192,31 +215,45 @@ impl SteamClient {
     pub fn request_join_server(&self, version: u32, serverid: u64, server_ip: u32, server_port: u32) -> anyhow::Result<JoinServerReservation>
     {
         let mut msg = CMsgGCCStrike15_v2_ClientRequestJoinServerData::new();
+
+        // matchmaking accountid, derived from steamid but held from matchamking  hello
         msg.set_account_id(self.state.lock().unwrap().accountid);
+        // version of the client connecting
         msg.set_version(version);
+        // server's steamid
         msg.set_serverid(serverid);
+        // server's ip (as we know it)
         msg.set_server_ip(server_ip);
+        // server's port (as we know it)
         msg.set_server_port(server_port);
 
+        // channel to wait on reservation when it comes in
         let (send, recv) = mpsc::sync_channel(1);
 
+        // perform the request to join a server
         self.do_request::<CMsgGCCStrike15_v2_ClientRequestJoinServerData, _, _>(
             ECsgoGCMsg::k_EMsgGCCStrike15_v2_ClientRequestJoinServerData as u32,
             msg,
             ECsgoGCMsg::k_EMsgGCCStrike15_v2_ClientRequestJoinServerData as u32,
             Duration::from_millis(1000),
             move |pkt| {
+               // we got a reservation from the server
                let reservation = pkt.res.unwrap();
+
+               // interpret the protobuf packet into a structure we actually want to return
                let reservation = JoinServerReservation{
                    reservationid: reservation.get_reservationid(),
                    direct_udp_ip: Ipv4Addr::from(reservation.get_direct_udp_ip()),
                    direct_udp_port: reservation.get_direct_udp_port(),
                    serverid: reservation.get_serverid()
                };
+
+               // send that over the channel, which will hit the recv.recv() and unblock it
                send.send(reservation).unwrap();
             }
         )?;
 
+        // wait until the request finishes or times out
         return Ok(recv.recv()?);
     }
 

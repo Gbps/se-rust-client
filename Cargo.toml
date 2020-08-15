@@ -18,3 +18,4 @@ protobuf = { version = "2", features = ["with-bytes"] }
 bitstream-io = "0.8.5"
 libc = "0.2"
 steamworks = {git = "https://github.com/Gbps/steamworks-rs.git"}
+pretty-hex = "0.1.1"

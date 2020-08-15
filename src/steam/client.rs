@@ -2,6 +2,7 @@ use steamworks::*;
 use std::time::Duration;
 use std::thread::JoinHandle;
 use std::sync::{Arc, Mutex, mpsc};
+use std::net::{Ipv4Addr};
 use anyhow::Context;
 use csgogcprotos::gcsystemmsgs::{EGCBaseClientMsg};
 use csgogcprotos::cstrike15_gcmessages::{ECsgoGCMsg, CMsgGCCStrike15_v2_MatchmakingGC2ClientHello, CMsgGCCStrike15_v2_ClientRequestJoinServerData};
@@ -28,6 +29,24 @@ pub struct SteamClientState
 {
     /// CS:GO Matchmaking Account ID, received from matchmaking hello
     accountid: u32,
+}
+
+/// The result of a call to `request_join_server`
+#[derive(Debug)]
+pub struct JoinServerReservation
+{
+    /// The steamid of the server
+    pub serverid: u64,
+
+    /// The IP address which Steam asks us to connect to
+    pub direct_udp_ip: Ipv4Addr,
+
+    /// Port which Steam asks us to connect to
+    pub direct_udp_port: u32,
+
+    /// The reservation ID, used in the C2S_CONNECT packet to verify
+    /// a successful Steam request to join
+    pub reservationid: u64,
 }
 
 /// Helper to transform an enum into a proto id
@@ -103,7 +122,7 @@ impl SteamClient {
             proto_id(enum_val),
             move |_pkt| {
                 // decode protobuf packet
-                let res = protoutil::deserialize::<ProtoMsgType>(&_pkt.buffer).unwrap();
+                let res = protoutil::deserialize::<ProtoMsgType>(&_pkt.body).unwrap();
                 callback(res);
             }
         )
@@ -148,8 +167,29 @@ impl SteamClient {
         return Ok(())
     }
 
+    /// Get an authentication ticket to authenticate with a server.
+    ///
+    /// This ticket must be sent to the server to verify that your user's identity
+    /// and that you own the game.
+    pub fn get_auth_ticket(&self) -> anyhow::Result<Vec<u8>>
+    {
+        let steam_user = self._client.user();
+
+        // discarding auth_handle because we don't plan to ever cancel this ticket
+        let (_auth_handle, ticket) = steam_user.authentication_session_ticket();
+
+        return Ok(ticket)
+    }
+
+    /// Get the SteamID of the currently logged in user.
+    pub fn get_steam_id(&self) -> steamworks::SteamId
+    {
+        return self._client.user().steam_id();
+    }
+
     /// Send a request to join a server and wait on the result
-    pub fn request_join_server(&self, version: u32, serverid: u64, server_ip: u32, server_port: u32) -> anyhow::Result<()>
+    /// Returns a `JoinServerReservation` struct which represents the server reservation
+    pub fn request_join_server(&self, version: u32, serverid: u64, server_ip: u32, server_port: u32) -> anyhow::Result<JoinServerReservation>
     {
         let mut msg = CMsgGCCStrike15_v2_ClientRequestJoinServerData::new();
         msg.set_account_id(self.state.lock().unwrap().accountid);
@@ -157,7 +197,8 @@ impl SteamClient {
         msg.set_serverid(serverid);
         msg.set_server_ip(server_ip);
         msg.set_server_port(server_port);
-        dbg!(&msg);
+
+        let (send, recv) = mpsc::sync_channel(1);
 
         self.do_request::<CMsgGCCStrike15_v2_ClientRequestJoinServerData, _, _>(
             ECsgoGCMsg::k_EMsgGCCStrike15_v2_ClientRequestJoinServerData as u32,
@@ -165,11 +206,18 @@ impl SteamClient {
             ECsgoGCMsg::k_EMsgGCCStrike15_v2_ClientRequestJoinServerData as u32,
             Duration::from_millis(1000),
             move |pkt| {
-                println!("Received join server packet!");
+               let reservation = pkt.res.unwrap();
+               let reservation = JoinServerReservation{
+                   reservationid: reservation.get_reservationid(),
+                   direct_udp_ip: Ipv4Addr::from(reservation.get_direct_udp_ip()),
+                   direct_udp_port: reservation.get_direct_udp_port(),
+                   serverid: reservation.get_serverid()
+               };
+               send.send(reservation).unwrap();
             }
         )?;
 
-        return Ok(())
+        return Ok(recv.recv()?);
     }
 
     /// Send a client hello and block waiting for the response

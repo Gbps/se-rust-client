@@ -4,7 +4,7 @@
 pub fn deserialize<M>(bytes: &[u8]) -> anyhow::Result<M>
     where M: protobuf::Message
 {
-    let res = protobuf::parse_from_bytes::<M>(&bytes[8..])?;
+    let res = protobuf::parse_from_bytes::<M>(&bytes)?;
     return Ok(res);
 }
 

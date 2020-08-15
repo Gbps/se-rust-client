@@ -540,6 +540,7 @@ dependencies = [
  "libc",
  "num-derive",
  "num-traits",
+ "pretty-hex",
  "protobuf",
  "protoc-rust",
  "steamworks",
@@ -554,7 +555,7 @@ checksum = "7fdf1b9db47230893d76faad238fd6097fd6d6a9245cd7a4d90dbd639536bbd2"
 [[package]]
 name = "steamworks"
 version = "0.6.1"
-source = "git+https://github.com/Gbps/steamworks-rs.git#3207eaa9aa56019ce89d1ac54b9ad72ec0fdf7a5"
+source = "git+https://github.com/Gbps/steamworks-rs.git#6b981bd07eab7b722ba0763157a47b34ecfd0acd"
 dependencies = [
  "bitflags",
  "byteorder",
@@ -568,7 +569,7 @@ dependencies = [
 [[package]]
 name = "steamworks-sys"
 version = "0.6.1"
-source = "git+https://github.com/Gbps/steamworks-rs.git#3207eaa9aa56019ce89d1ac54b9ad72ec0fdf7a5"
+source = "git+https://github.com/Gbps/steamworks-rs.git#6b981bd07eab7b722ba0763157a47b34ecfd0acd"
 dependencies = [
  "bindgen",
  "dunce",

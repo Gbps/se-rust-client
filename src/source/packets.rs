@@ -203,10 +203,8 @@ pub enum CrossplayPlatform
 #[derive(Debug)]
 pub struct SteamAuthInfo
 {
-    pub size: u16,
     pub steamid: u64,
     pub auth_ticket: Vec<u8>,
-    pub size_of_ticket: u64
 }
 
 #[derive(Debug)]
@@ -218,13 +216,14 @@ pub struct C2sConnect
     pub player_name: String,
     pub server_password: String,
     pub num_players: u8,
-    pub split_player_connect: CCLCMsg_SplitPlayerConnect,
+    pub split_player_connect: Vec<CCLCMsg_SplitPlayerConnect>,
     pub low_violence: bool,
     pub lobby_cookie: u64,
     pub crossplay_platform: CrossplayPlatform,
-    pub cert_encryption: u32,
+    pub encryption_key_index: u32,
     pub auth_info: SteamAuthInfo,
 }
+
 impl ConnectionlessPacketTrait for C2sConnect
 {
     fn serialize_values(&self, target: &mut BitBufWriterType) -> Result<()>
@@ -237,12 +236,12 @@ impl ConnectionlessPacketTrait for C2sConnect
         target.write_string(&self.server_password)?;
         target.write_char(self.num_players)?;
 
-        // encode protobuf
+        for player_num in 0..self.num_players
         {
             // netmessage number, not used
             target.write_int32_var(0)?;
 
-            let encoded = self.split_player_connect.write_to_bytes()?;
+            let encoded = self.split_player_connect[player_num as usize].write_to_bytes()?;
             target.write_int32_var(encoded.len() as u32)?;
             target.write_bytes(&encoded)?;
         }
@@ -251,14 +250,18 @@ impl ConnectionlessPacketTrait for C2sConnect
         target.write_bit(self.low_violence)?;
         target.write_longlong(self.lobby_cookie)?;
         target.write_char(ToPrimitive::to_u8(&self.crossplay_platform).ok_or(anyhow::anyhow!("Invalid crossplay platform"))?)?;
-        target.write_long(self.cert_encryption)?;
+        target.write_long(self.encryption_key_index)?;
 
         // auth info fields
-        target.write_word(self.auth_info.size)?;
+        target.write_word((self.auth_info.auth_ticket.len() as u16)+8)?;
         target.write_longlong(self.auth_info.steamid)?;
         target.write_bytes(&self.auth_info.auth_ticket)?;
-        target.write_longlong(self.auth_info.size_of_ticket)?;
 
+        // what genius though "oh, let's use a single bit to represent
+        // low_violence and just leave this entire thing unaligned to a single byte...
+        for _i in 0..7 {
+            target.write_bit(false)?;
+        }
         Ok(())
     }
 }

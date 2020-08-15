@@ -46,7 +46,6 @@ impl BufUdp
         let res = self.socket
             .recv(self.inner_vec.as_mut())
             .context("recv_message failed to read from socket")?;
-
         // return the part of the vector that contains the message
         Ok(&self.inner_vec[0..res])
     }
@@ -71,7 +70,6 @@ impl BufUdp
         Ok(())
     }
 }
-
 
 // send and receive connectionless source engine packets
 pub struct ConnectionlessChannel

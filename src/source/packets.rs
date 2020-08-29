@@ -265,3 +265,27 @@ impl ConnectionlessPacketTrait for C2sConnect
         Ok(())
     }
 }
+
+// server responds to challenge with additional server info
+#[derive(Debug)]
+pub struct S2cConnection
+{
+    // connection string (largely unused, contains a single often unused encryption key index value)
+    connection_string: String,
+}
+
+impl ConnectionlessPacketTrait for S2cConnection {}
+impl ConnectionlessPacketReceive for S2cConnection
+{
+    fn get_type() -> ConnectionlessPacketType
+    {
+        ConnectionlessPacketType::S2C_CONNECTION
+    }
+
+    fn read_values(packet: &mut BitBufReaderType) -> Result<S2cConnection>
+    {
+        Ok(S2cConnection {
+            connection_string: packet.read_string()?,
+        })
+    }
+}

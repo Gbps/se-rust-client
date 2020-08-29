@@ -81,9 +81,9 @@ pub struct ConnectionlessChannel
 impl ConnectionlessChannel
 {
     // wrap a udp socket
-    pub fn new(socket: UdpSocket) -> Result<ConnectionlessChannel>
+    pub fn new(socket: UdpSocket) -> Result<Self>
     {
-        Ok(ConnectionlessChannel
+        Ok(Self
         {
             wrapper: BufUdp::new(socket)
         })
@@ -133,3 +133,54 @@ impl ConnectionlessChannel
     }
 }
 
+/// A NetChannel is a fully established connection with a server which can send source engine
+/// netmessage packets between it
+pub struct NetChannel
+{
+    // buffered udp socket
+    wrapper: BufUdp,
+
+    /// ICE network encryption key
+    encryption_key: Vec<u8>,
+}
+
+/// Specifies that a datagram packet is a split packet
+const NET_HEADER_FLAG_SPLITPACKET: u32 = 0xFFFFFFFE;
+const CONNECTIONLESS_HEADER: u32 = 0xFFFFFFFF;
+
+impl NetChannel {
+    // upgrade a connectionless channel into a netchannel after authentication is complete
+    pub fn upgrade(socket: ConnectionlessChannel) -> Result<Self>
+    {
+        let encryption_key: &[u8] = &[0x43, 0x53, 0x46, 0x4F, 0xC3, 0x35, 0x00, 0x00, 0x70, 0x0D, 0x00, 0x00, 0x5C, 0x03, 0x00, 0x00];
+
+        Ok(Self
+        {
+            encryption_key: Vec::from(encryption_key),
+            wrapper: socket.wrapper
+        })
+    }
+
+    // read all of the incoming data from a packet
+    pub fn read_data(&mut self) -> Result<()>
+    {
+        // receive the datagram over the network
+        let datagram = self.wrapper.recv_message()?;
+
+        // wrap the datagram in a bitbuffer
+        let mut reader: BitBufReaderType = BitReader::endian(std::io::Cursor::new(datagram), LittleEndian);
+
+        // check the packet header for a split packet
+        let header = reader.read_long()?;
+        if header == NET_HEADER_FLAG_SPLITPACKET {
+            panic!("Split packets not supported yet!");
+        } else if header == CONNECTIONLESS_HEADER {
+            panic!("Unexpected connectionless packet!");
+        }
+
+        
+
+
+        Ok(())
+    }
+}

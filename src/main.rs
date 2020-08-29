@@ -17,10 +17,10 @@ use pretty_hex::PrettyHex;
 
 fn run() -> anyhow::Result<()>
 {
-    println!("Connecting to Steam...");
+    println!("[*] Connecting to Steam...");
     let _steam = SteamClient::connect()?;
     //_steam.request_join_server(13759, )
-    println!("Connected to Steam!");
+    println!("[*] Connected to Steam!");
 
     // bind to some client socket
     let socket = UdpSocket::bind("192.168.201.1:20403")?;
@@ -78,7 +78,6 @@ fn run() -> anyhow::Result<()>
         ip_encoded,
         addr.port() as u32
     )?;
-    dbg!(&reservation);
 
     // now we need to ask the steamworks api to generate our client an authentication ticket
     // to send to the server
@@ -87,9 +86,10 @@ fn run() -> anyhow::Result<()>
     // that we own the game we are trying to use and that we are who we say we are (so the server
     // can properly assign our steamid)
     let auth_ticket = _steam.get_auth_ticket()?;
-    println!("Ticket length: {}", auth_ticket.len());
-    println!("SteamID: {}", _steam.get_steam_id().raw());
-    println!("{:?}", auth_ticket.hex_dump());
+    println!("[*] Ticket length: {}", auth_ticket.len());
+    println!("[*] SteamID: {}", _steam.get_steam_id().raw());
+    println!("[*] ReservationID: {}", reservation.reservationid);
+
 
     let auth = SteamAuthInfo {
         steamid: _steam.get_steam_id().raw(),
@@ -130,6 +130,15 @@ fn run() -> anyhow::Result<()>
 
     // send off the connect packet
     stream.send_packet(conn.into())?;
+
+    // assuming everything worked out, we should get S2CConnection back, which means we have established
+    // a netchannel
+    // we actually receive two different S2C_Connection packets, neither of them actually matter.
+    let _connection_pkt: S2cConnection = stream.recv_packet_type()?;
+    let _connection_pkt: S2cConnection = stream.recv_packet_type()?;
+    dbg!(_connection_pkt);
+    println!("[*] Successfully established a netchannel.");
+
 
     ::std::thread::sleep(std::time::Duration::from_millis(10000));
     Ok(())

@@ -166,6 +166,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "crc32fast"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba125de2af0df55319f41944744ad91c71113bf74a4646efff39afe1f6842db1"
+dependencies = [
+ "cfg-if",
+]
+
+[[package]]
 name = "csgogcprotos"
 version = "0.1.0"
 source = "git+https://github.com/Gbps/csgogcprotos-rs#ac28ba5523fe2994c0fc556ed515a07ccfe6e5f3"
@@ -535,6 +544,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitstream-io",
+ "crc32fast",
  "csgogcprotos",
  "enum_dispatch",
  "libc",

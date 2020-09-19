@@ -10,7 +10,7 @@ use source::ConnectionlessChannel;
 use source::packets::*;
 use steam::SteamClient;
 use source::protos::{CMsg_CVars, CCLCMsg_SplitPlayerConnect, CMsg_CVars_CVar};
-
+use source::NetChannel;
 
 use std::net::{UdpSocket, IpAddr};
 use pretty_hex::PrettyHex;
@@ -139,7 +139,12 @@ fn run() -> anyhow::Result<()>
     dbg!(_connection_pkt);
     println!("[*] Successfully established a netchannel.");
 
+    let mut channel = NetChannel::upgrade(stream, chal.host_version)?;
 
+    channel.read_data();
+    let err = channel.write_datagram(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+    dbg!(&err);
     ::std::thread::sleep(std::time::Duration::from_millis(10000));
     Ok(())
 }

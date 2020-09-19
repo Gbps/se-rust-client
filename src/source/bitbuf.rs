@@ -17,6 +17,7 @@ pub trait WireReader
     fn read_word(&mut self) -> Result<u16>;
     fn read_char(&mut self) -> Result<u8>;
     fn read_string(&mut self) -> Result<String>;
+    fn read_int32_var(&mut self) -> Result<u32>;
 }
 
 // reads values from a buffer
@@ -76,6 +77,31 @@ impl<T> WireReader for BitReader<T, LittleEndian>
         let out_str = std::str::from_utf8(&buf[..])?;
 
         Ok(out_str.to_string())
+    }
+
+    /// source engine variable length 32-bit int encoding
+    #[inline]
+    fn read_int32_var(&mut self) -> Result<u32>
+    {
+        let data: u8 = self.read_char()?;
+        let mut res: u32 = 0;
+        let mut count: u32 = 0;
+
+        loop
+        {
+            // maximum encoded bytes
+            if count == 5 {
+                return Ok(res);
+            }
+
+            res |= ((data & 0x7F) as u32) << (7 * count);
+            count += 1;
+            if (data & 0x80) != 0 {
+                break;
+            }
+        }
+
+        Ok(res)
     }
 }
 

@@ -63,7 +63,7 @@ const ice_keyrot2: &'static [i32] = &[
     1, 3, 2, 0, 3, 1, 0, 2
 ];
 
-struct IceEncryption {
+pub struct IceEncryption {
     ice_sbox: [[u32; 1024]; 4],
     ice_key: IceKeyStruct,
 }
@@ -101,21 +101,46 @@ impl IceEncryption {
     /// * `ctext` - A reference to a mutable array of at least 8-bytes for ciphertext output
     pub fn encrypt(&self, ptext: &[u8], ctext: &mut [u8])
     {
-        let ik = &self.ice_key;
+        let lr = self.encrypt_block_inplace_prepare(ptext);
+        self.encrypt_block_inplace(lr, ctext);
+    }
 
-        let mut i: usize = 0;
-        let mut l: u32;
-        let mut r: u32;
-
-        l = ((ptext[0] as u32) << 24)
+   /// Prepare to encrypt 8-bytes of ciphertext in-place.
+   /// Pass the return value into `encrypt_inplace` to encrypt plaintext.
+   /// Using this instead of `encrypt` allows for slice reference aliasing to encrypt a buffer
+   /// in-place.
+   ///
+   /// # Arguments
+   ///
+   /// * `ptext` - A reference to 8-bytes of plaintext to encrypt
+   fn encrypt_block_inplace_prepare(&self, ptext: &[u8]) -> (u32, u32)
+   {
+        let l = ((ptext[0] as u32) << 24)
             | ((ptext[1] as u32) << 16)
             | ((ptext[2] as u32) << 8) | (ptext[3] as u32);
 
-        r = ((ptext[4] as u32) << 24)
+        let r = ((ptext[4] as u32) << 24)
             | ((ptext[5] as u32) << 16)
             | ((ptext[6] as u32) << 8) | (ptext[7] as u32);
 
-        loop {
+        return (l, r)
+   }
+
+    /// Encrypt 8-bytes of plaintext in-place.
+    /// Pass the return value from `encrypt_block_inplace_prepare` to encrypt plaintext.
+    /// Using this instead of `encrypt` allows for slice reference aliasing to encrypt a buffer
+    /// in-place.
+    ///
+    /// # Arguments
+    ///
+    /// * `lr` - The result of a call to `encrypt_block_inplace_prepare`
+    fn encrypt_block_inplace(&self, lr: (u32, u32), ctext: &mut [u8])
+    {
+        let ik = &self.ice_key;
+        let mut i: usize = 0;
+        let (mut l, mut r) = lr;
+
+            loop {
             if i >= ik.ik_rounds {
                 break;
             }
@@ -140,6 +165,39 @@ impl IceEncryption {
         }
     }
 
+    /// Encrypt an 8-byte aligned buffer in-place.
+    /// Panics if the buffer length is not divisible by 8.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The buffer to encrypt in place.
+    pub fn encrypt_buffer_inplace(&self, buffer: &mut [u8])
+    {
+        assert_eq!(buffer.len() % 8, 0);
+
+        let nblocks = buffer.len() / 8;
+
+        // decrypt each block
+        for i in 0..nblocks {
+            // start of this block in bytes
+            let start_pos = i*8;
+            // end of this block in bytes
+            let end_pos = (i+1)*8;
+
+            let lr;
+            {
+                // reference to the full block to decrypt
+                let block = &buffer[start_pos..end_pos];
+                lr = self.encrypt_block_inplace_prepare(block);
+            }
+
+            // scratch space to decrypt to
+            let scratch_block = &mut buffer[start_pos..end_pos];
+            self.encrypt_block_inplace(lr, scratch_block);
+        }
+    }
+
+
     /// Decrypt 8-bytes of ciphertext
     ///
     /// # Arguments
@@ -148,18 +206,46 @@ impl IceEncryption {
     /// * `ptext` - A reference to a mutable array of at least 8-bytes for plaintext output
     pub fn decrypt(&self, ctext: &[u8], ptext: &mut [u8])
     {
-        let ik = &self.ice_key;
-        let mut i: isize;
-        let mut l: u32;
-        let mut r: u32;
+        let lr = self.decrypt_block_inplace_prepare(ctext);
+        self.decrypt_block_inplace(lr, ptext);
+    }
 
-        l = ((ctext[0] as u32) << 24)
+    /// Prepare to decrypt 8-bytes of ciphertext in-place.
+    /// Pass the return value into decrypt_inplace to decrypt plaintext.
+    /// Using this instead of `decrypt` allows for slice reference aliasing to decrypt a buffer
+    /// in-place.
+    ///
+    /// # Arguments
+    ///
+    /// * `ctext` - A reference to 8-bytes of ciphertext to decrypt
+    #[inline(always)]
+    pub fn decrypt_block_inplace_prepare(&self, ctext: &[u8]) -> (u32, u32)
+    {
+        let l = ((ctext[0] as u32) << 24)
             | ((ctext[1] as u32) << 16)
             | ((ctext[2] as u32) << 8) | (ctext[3] as u32);
 
-        r = ((ctext[4] as u32) << 24)
+        let r = ((ctext[4] as u32) << 24)
             | ((ctext[5] as u32) << 16)
             | ((ctext[6] as u32) << 8) | (ctext[7] as u32);
+
+        return (l, r)
+    }
+
+    /// Decrypt 8-bytes of ciphertext in-place.
+    /// Pass the return value from `decrypt_block_inplace_prepare` to decrypt plaintext.
+    /// Using this instead of `decrypt` allows for slice reference aliasing to decrypt a buffer
+    /// in-place.
+    ///
+    /// # Arguments
+    ///
+    /// * `lr` - The result of a call to `decrypt_block_inplace_prepare`
+    pub fn decrypt_block_inplace(&self, lr: (u32, u32), ptext: &mut [u8])
+    {
+        let ik = &self.ice_key;
+        let mut i: isize;
+
+        let (mut l, mut r) = lr;
 
         i = (ik.ik_rounds as isize) - 1;
         loop {
@@ -184,6 +270,38 @@ impl IceEncryption {
             r >>= 8;
             l >>= 8;
             i += 1;
+        }
+    }
+
+    /// Decrypt an 8-byte aligned buffer in-place.
+    /// Panics if the buffer length is not divisible by 8.
+    ///
+    /// # Arguments
+    ///
+    /// * `buffer` - The buffer to decrypt in place.
+    pub fn decrypt_buffer_inplace(&self, buffer: &mut [u8])
+    {
+        assert_eq!(buffer.len() % 8, 0);
+
+        let nblocks = buffer.len() / 8;
+
+        // decrypt each block
+        for i in 0..nblocks {
+            // start of this block in bytes
+            let start_pos = i*8;
+            // end of this block in bytes
+            let end_pos = (i+1)*8;
+
+            let lr;
+            {
+                // reference to the full block to decrypt
+                let block = &buffer[start_pos..end_pos];
+                lr = self.decrypt_block_inplace_prepare(block);
+            }
+
+            // scratch space to decrypt to
+            let scratch_block = &mut buffer[start_pos..end_pos];
+            self.decrypt_block_inplace(lr, scratch_block);
         }
     }
 

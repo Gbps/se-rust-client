@@ -11,6 +11,8 @@ use std::borrow::{BorrowMut, Borrow};
 use crc32fast::Hasher;
 use std::io::Seek;
 use std::io::Cursor;
+use crate::source::netmessages::NetMessage;
+use smallvec::SmallVec;
 
 // implements a buffered udp reader
 pub struct BufUdp
@@ -190,6 +192,9 @@ pub struct NetChannel
 
     /// buffer to encrypt packets to
     encrypt_buffer: RefCell<Vec<u8>>,
+
+    /// buffer to encode protobuf packets into
+    encode_buffer: Vec<u8>,
 }
 
 /// Header read out of a basic netchannel packet
@@ -241,9 +246,10 @@ impl NetChannel {
             wrapper: RefCell::new(socket.wrapper),
             in_sequence: 0,
             out_sequence_ack: 0,
-            out_sequence: 0,
+            out_sequence: 1,
             choked_num: 0,
             encrypt_buffer: RefCell::new(Vec::with_capacity(4096)),
+            encode_buffer: Vec::with_capacity(4096),
         })
     }
 
@@ -443,6 +449,28 @@ impl NetChannel {
         Ok(())
     }
 
+    // send a netmessage to the server
+    pub fn write_netmessage<M>(&mut self, mut message: NetMessage<M>) -> anyhow::Result<()>
+        where M: ::protobuf::Message
+    {
+        // clear to prepare for a new
+        self.encode_buffer.clear();
+
+        // ensure there is enough space in the encode buffer
+        let max_size = message.get_max_size();
+        if self.encode_buffer.capacity() < max_size {
+            self.encode_buffer.reserve(message.get_max_size() - max_size);
+        }
+
+        // encode the protobuf message to the local encoding buffer
+        message.encode_to_buffer(&mut self.encode_buffer)?;
+
+        // write to the network
+        self.write_datagram(&self.encode_buffer)?;
+
+        Ok(())
+    }
+
     // write the header of the netchannel datagram
     pub fn write_datagram(&self, send_buffer: &[u8]) -> Result<()>
     {
@@ -452,11 +480,9 @@ impl NetChannel {
             let scratch = wrapper.get_scratch_mut();
 
             // reset the packet before we start writing
-            unsafe {
-                scratch.set_len(0);
-            }
+            scratch.clear();
 
-            // create a bit writer wraper on top
+            // create a bit writer wrapper on top
             let mut writer = BitWriter::endian(std::io::Cursor::new(scratch), LittleEndian);
 
             // outgoing sequence number for this packet
@@ -503,7 +529,7 @@ impl NetChannel {
         println!("{:?}", encrypted.hex_dump());
 
         // send the datagram
-        self.wrapper.borrow().send_raw(encrypted.as_slice());
+        self.wrapper.borrow().send_raw(encrypted.as_slice())?;
 
         Ok(())
     }
@@ -566,7 +592,7 @@ impl NetChannel {
             // TODO: Process subchannel data.
         }
 
-        // is there still data left?
+        // is there still data left? if so, netmessages will be here
 
         Ok((reader, NetChannelPacketHeader{
             sequence_ack,

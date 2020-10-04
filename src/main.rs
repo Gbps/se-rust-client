@@ -6,6 +6,7 @@ extern crate num_derive;
 
 mod source;
 mod steam;
+mod protoutil;
 use source::ConnectionlessChannel;
 use source::packets::*;
 use steam::SteamClient;
@@ -14,6 +15,8 @@ use source::NetChannel;
 
 use std::net::{UdpSocket, IpAddr};
 use pretty_hex::PrettyHex;
+use crate::source::netmessages::NetMessage;
+use crate::source::protos::NET_Messages;
 
 fn run() -> anyhow::Result<()>
 {
@@ -141,8 +144,15 @@ fn run() -> anyhow::Result<()>
 
     let mut channel = NetChannel::upgrade(stream, chal.host_version)?;
 
-    channel.read_data();
-    let err = channel.write_datagram(&[0xDE, 0xAD, 0xBE, 0xEF]);
+    channel.read_data()?;
+
+    let mut signon = source::protos::CNETMsg_SignonState::new();
+    signon.set_signon_state(2);
+
+    let msg = NetMessage::from_message(signon, NET_Messages::net_SignonState as u32);
+    let err = channel.write_netmessage(msg);
+
+    channel.read_data()?;
 
     dbg!(&err);
     ::std::thread::sleep(std::time::Duration::from_millis(10000));

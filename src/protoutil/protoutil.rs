@@ -1,6 +1,6 @@
+use std::io::Write;
 
 /// Deserialize a protobuf message from its bytes representation
-/// Removes the 8 byte GC header
 pub fn deserialize<M>(bytes: &[u8]) -> anyhow::Result<M>
     where M: protobuf::Message
 {
@@ -19,4 +19,23 @@ pub fn serialize<M>(proto_msg: M) -> anyhow::Result<Vec<u8>>
     proto_msg.write_to_vec(&mut vec)?;
 
     return Ok(vec);
+}
+
+/// Clears the buffer and writes a protobuf message to it
+pub fn serialize_to_buffer<M>(proto_msg: &M, buf: &mut Vec<u8>) -> anyhow::Result<()>
+    where M: protobuf::Message
+{
+    // clear space for message
+    buf.clear();
+
+    // compute size and resize buffer capacity to fit
+    let len = proto_msg.compute_size() as usize;
+    if buf.capacity() < len {
+        buf.reserve(len - buf.len());
+    }
+
+    // write the message to the buf
+    proto_msg.write_to_vec(buf)?;
+
+    return Ok(())
 }

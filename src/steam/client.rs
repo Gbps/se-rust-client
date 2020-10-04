@@ -6,7 +6,7 @@ use std::net::{Ipv4Addr};
 use anyhow::Context;
 use csgogcprotos::gcsystemmsgs::{EGCBaseClientMsg};
 use csgogcprotos::cstrike15_gcmessages::{ECsgoGCMsg, CMsgGCCStrike15_v2_MatchmakingGC2ClientHello, CMsgGCCStrike15_v2_ClientRequestJoinServerData};
-use crate::steam::protoutil;
+use crate::protoutil;
 
 /// Represents the state of a logged in steam client
 pub struct SteamClient

@@ -13,6 +13,7 @@ use std::io::Seek;
 use std::io::Cursor;
 use crate::source::netmessages::NetMessage;
 use smallvec::SmallVec;
+use crate::source::subchannel::SubChannel;
 
 // implements a buffered udp reader
 pub struct BufUdp
@@ -195,6 +196,9 @@ pub struct NetChannel
 
     /// buffer to encode protobuf packets into
     encode_buffer: Vec<u8>,
+
+    // all of the subchannels for this netchannel
+    subchannels: RefCell<[SubChannel; 2]>,
 }
 
 /// Header read out of a basic netchannel packet
@@ -240,6 +244,11 @@ impl NetChannel {
         // apply the ice key to prepare for encryption/decryption
         let crypt= IceEncryption::new(2, &encryption_key);
 
+        let subchannels: [SubChannel; 2] = [
+            SubChannel::new(),
+            SubChannel::new(),
+        ];
+
         Ok(Self
         {
             crypt,
@@ -250,6 +259,7 @@ impl NetChannel {
             choked_num: 0,
             encrypt_buffer: RefCell::new(Vec::with_capacity(4096)),
             encode_buffer: Vec::with_capacity(4096),
+            subchannels: RefCell::new(subchannels),
         })
     }
 
@@ -557,6 +567,8 @@ impl NetChannel {
         // checksum of the packet
         let checksum: i16 = reader.read_signed(16)?;
 
+        // TODO: Checksum the packet
+
         // reliable state of each of the 8 subchannels
         let reliable_state = reader.read_char()?;
 
@@ -580,11 +592,15 @@ impl NetChannel {
         if (flags & PACKET_RELIABLE) != 0
         {
             let _bits: i8 = reader.read_signed(3)?;
-            for _subchan_i in 0..8 {
+            for subchan_i in 0..2 {
                 let updated = reader.read_bit()?;
                 if updated {
-                    // TODO: Read subchannel data
-                    panic!("Subchannel data not implemented.");
+                    let mut subchans = self.subchannels.borrow_mut();
+                    let subchan = &mut subchans[subchan_i];
+
+                    // read all incoming subchannel data
+                    let err = subchan.read_subchannel_data(&mut reader);
+                    dbg!(&err);
                 }
             }
 

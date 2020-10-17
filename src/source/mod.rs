@@ -1,3 +1,4 @@
+mod subchannel;
 mod channel;
 mod packetbase;
 mod bitbuf;

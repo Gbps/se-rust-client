@@ -13,7 +13,7 @@ use steam::SteamClient;
 use source::protos::{CMsg_CVars, CCLCMsg_SplitPlayerConnect, CMsg_CVars_CVar};
 use source::NetChannel;
 
-use std::net::{UdpSocket, IpAddr};
+use std::net::{UdpSocket, IpAddr, ToSocketAddrs};
 use pretty_hex::PrettyHex;
 use crate::source::netmessages::NetMessage;
 use crate::source::protos::NET_Messages;
@@ -26,10 +26,10 @@ fn run() -> anyhow::Result<()>
     println!("[*] Connected to Steam!");
 
     // bind to some client socket
-    let socket = UdpSocket::bind("192.168.201.1:20403")?;
+    let socket = UdpSocket::bind("172.19.131.98:20403")?;
 
     // "connect" to udp server
-    socket.connect("192.168.201.128:6543")?;
+    socket.connect("source.ctf.re:27015")?;
     let addr = socket.peer_addr()?;
 
     // promote to a connectionless netchannel
@@ -121,7 +121,7 @@ fn run() -> anyhow::Result<()>
         auth_protocol: AuthProtocolType::PROTOCOL_STEAM,
         challenge_num: chal.challenge_num,
         player_name: String::new(), // not used cs:go, uses "name" from the protobuf above^
-        server_password: String::new(), // no password
+        server_password: String::from("a59CdkwjR4"),
         num_players: 1, // no split screen
         split_player_connect: player_connects,
         low_violence: false,
@@ -149,10 +149,12 @@ fn run() -> anyhow::Result<()>
     let mut signon = source::protos::CNETMsg_SignonState::new();
     signon.set_signon_state(2);
 
-    let msg = NetMessage::from_message(signon, NET_Messages::net_SignonState as u32);
+    let msg = NetMessage::from_proto(signon, NET_Messages::net_SignonState as u32);
     let err = channel.write_netmessage(msg);
 
-    channel.read_data()?;
+    while(true) {
+        channel.read_data()?;
+    }
 
     dbg!(&err);
     ::std::thread::sleep(std::time::Duration::from_millis(10000));

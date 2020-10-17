@@ -235,7 +235,7 @@ impl SteamClient {
             ECsgoGCMsg::k_EMsgGCCStrike15_v2_ClientRequestJoinServerData as u32,
             msg,
             ECsgoGCMsg::k_EMsgGCCStrike15_v2_ClientRequestJoinServerData as u32,
-            Duration::from_millis(1000),
+            Duration::from_millis(10000),
             move |pkt| {
                // we got a reservation from the server
                let reservation = pkt.res.unwrap();
@@ -298,7 +298,7 @@ impl SteamClient {
 
             // wait a bit for the response
             result = receiver
-                .recv_timeout(Duration::from_millis(1000))
+                .recv_timeout(Duration::from_millis(10000))
                 .context("Timeout while waiting for GC welcome.");
 
             // did we get a welcome? okay we're good to go, don't retry again

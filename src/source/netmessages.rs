@@ -73,7 +73,7 @@ impl<M> NetMessage<M>
     }
 
     // create a message to send from a proto message and the id of the message
-    pub fn from_message(message: M, id: u32) -> Self {
+    pub fn from_proto(message: M, id: u32) -> Self {
         NetMessage{
             id,
             size: message.compute_size(),

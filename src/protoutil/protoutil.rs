@@ -1,6 +1,4 @@
-use std::io::Write;
-
-/// Deserialize a protobuf message from its bytes representation
+// Deserialize a protobuf message from its bytes representation
 pub fn deserialize<M>(bytes: &[u8]) -> anyhow::Result<M>
     where M: protobuf::Message
 {

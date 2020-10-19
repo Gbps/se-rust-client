@@ -13,23 +13,25 @@ use steam::SteamClient;
 use source::protos::{CMsg_CVars, CCLCMsg_SplitPlayerConnect, CMsg_CVars_CVar};
 use source::NetChannel;
 
-use std::net::{UdpSocket, IpAddr, ToSocketAddrs};
-use pretty_hex::PrettyHex;
+use std::net::{UdpSocket, IpAddr};
 use crate::source::netmessages::NetMessage;
 use crate::source::protos::NET_Messages;
+use log::{info, debug};
 
 fn run() -> anyhow::Result<()>
 {
-    println!("[*] Connecting to Steam...");
+    pretty_env_logger::init();
+
+    info!("Connecting to Steam...");
     let _steam = SteamClient::connect()?;
     //_steam.request_join_server(13759, )
-    println!("[*] Connected to Steam!");
+    info!("Connected to Steam!");
 
     // bind to some client socket
-    let socket = UdpSocket::bind("172.19.131.98:20403")?;
+    let socket = UdpSocket::bind("0.0.0.0:0")?;
 
     // "connect" to udp server
-    socket.connect("source.ctf.re:27015")?;
+    socket.connect("192.168.201.128:6543")?;
     let addr = socket.peer_addr()?;
 
     // promote to a connectionless netchannel
@@ -89,9 +91,9 @@ fn run() -> anyhow::Result<()>
     // that we own the game we are trying to use and that we are who we say we are (so the server
     // can properly assign our steamid)
     let auth_ticket = _steam.get_auth_ticket()?;
-    println!("[*] Ticket length: {}", auth_ticket.len());
-    println!("[*] SteamID: {}", _steam.get_steam_id().raw());
-    println!("[*] ReservationID: {}", reservation.reservationid);
+    info!("Ticket length: {}", auth_ticket.len());
+    info!("SteamID: {}", _steam.get_steam_id().raw());
+    info!("ReservationID: {}", reservation.reservationid);
 
 
     let auth = SteamAuthInfo {
@@ -139,8 +141,8 @@ fn run() -> anyhow::Result<()>
     // we actually receive two different S2C_Connection packets, neither of them actually matter.
     let _connection_pkt: S2cConnection = stream.recv_packet_type()?;
     let _connection_pkt: S2cConnection = stream.recv_packet_type()?;
-    dbg!(_connection_pkt);
-    println!("[*] Successfully established a netchannel.");
+    debug!("Connect packet: {:?}", &_connection_pkt);
+    info!("Successfully established a netchannel.");
 
     let mut channel = NetChannel::upgrade(stream, chal.host_version)?;
 
@@ -151,14 +153,17 @@ fn run() -> anyhow::Result<()>
 
     let msg = NetMessage::from_proto(signon, NET_Messages::net_SignonState as u32);
     let err = channel.write_netmessage(msg);
+    debug!("Packet result: {:?}", &err);
 
-    while(true) {
+    loop{
+        // read incoming data
         channel.read_data()?;
-    }
 
-    dbg!(&err);
-    ::std::thread::sleep(std::time::Duration::from_millis(10000));
-    Ok(())
+        // blank message just to keep the other side updated
+        channel.write_nop();
+    }
+    //::std::thread::sleep(std::time::Duration::from_millis(10000));
+    //Ok(())
 }
 
 fn main() {
@@ -167,6 +172,6 @@ fn main() {
 
     if let Err(e) = res
     {
-        println!("ERROR: {:?}", e);
+        info!("ERROR: {:?}", e);
     }
 }

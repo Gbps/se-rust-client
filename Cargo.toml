@@ -21,3 +21,5 @@ steamworks = {git = "https://github.com/Gbps/steamworks-rs.git"}
 pretty-hex = "0.1.1"
 crc32fast = "1.2.0"
 smallvec = { version = "1.4.2", features = ['write'] }
+log = { version = "0.4", features = ["max_level_trace", "release_max_level_warn"] }
+pretty_env_logger = "0.4.0"

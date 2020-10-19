@@ -5,15 +5,13 @@ use super::bitbuf::*;
 use pretty_hex::PrettyHex;
 use crate::source::ice::IceEncryption;
 use bitstream_io::BigEndian;
-use std::cell::{RefCell, RefMut, Ref};
-use std::rc::Rc;
-use std::borrow::{BorrowMut, Borrow};
+use std::cell::{RefCell, Ref, Cell};
 use crc32fast::Hasher;
-use std::io::Seek;
 use std::io::Cursor;
 use crate::source::netmessages::NetMessage;
-use smallvec::SmallVec;
-use crate::source::subchannel::SubChannel;
+use crate::source::subchannel::{SubChannel};
+use log::{trace, warn};
+use crate::source::lzss::Lzss;
 
 // implements a buffered udp reader
 pub struct BufUdp
@@ -197,8 +195,11 @@ pub struct NetChannel
     /// buffer to encode protobuf packets into
     encode_buffer: Vec<u8>,
 
-    // all of the subchannels for this netchannel
+    /// all of the subchannels for this netchannel
     subchannels: RefCell<[SubChannel; 2]>,
+
+    /// current reliable state of all subchannels
+    reliable_state: Cell<u8>,
 }
 
 /// Header read out of a basic netchannel packet
@@ -260,6 +261,7 @@ impl NetChannel {
             encrypt_buffer: RefCell::new(Vec::with_capacity(4096)),
             encode_buffer: Vec::with_capacity(4096),
             subchannels: RefCell::new(subchannels),
+            reliable_state: Cell::new(0),
         })
     }
 
@@ -301,25 +303,17 @@ impl NetChannel {
         let packet_data = self.decrypt_packet(datagram)?;
 
         // if we're here, we have successfully decrypted the contents of the packet
-        println!("Packet: \n{:?}", packet_data.hex_dump());
+        trace!("[RECV DATAGRAM]: \n{:?}", packet_data.hex_dump());
 
         // process header data, sequence numbers, subchannel data, etc.
-        let (mut remaining_data, header) = self.read_packet_header(&packet_data)?;
+        let header = self.read_packet_header(&packet_data)?;
 
         // update current sequence number info for this packet
         self.in_sequence = header.sequence_in;
         self.out_sequence_ack = header.sequence_ack;
 
-        dbg!(&header);
+        trace!("Header: {:?}\n", &header);
 
-        // if there is still data, there must be messages for us to process
-        let message_number = remaining_data.read_int32_var();
-        if message_number.is_err() {
-            // no netmessages remain
-            println!("No more net messages");
-            return Ok(())
-        }
-        println!("Message number: {}", message_number?);
 
         Ok(())
     }
@@ -404,8 +398,6 @@ impl NetChannel {
             // and the actual payload
             writer.write_bytes(datagram)?;
 
-            println!("{:?}", out_buffer.hex_dump());
-
             // encrypt the buffer
             self.crypt.encrypt_buffer_inplace( out_buffer.as_mut_slice());
         }
@@ -478,6 +470,21 @@ impl NetChannel {
         // write to the network
         self.write_datagram(&self.encode_buffer)?;
 
+        // continue processing next sequence
+        self.out_sequence += 1;
+
+        Ok(())
+    }
+
+    // write a nop packet (no net messages encoded)
+    pub fn write_nop(&mut self) -> anyhow::Result<()>
+    {
+        // write to the network
+        self.write_datagram(&[])?;
+
+        // continue processing next sequence
+        self.out_sequence += 1;
+
         Ok(())
     }
 
@@ -515,15 +522,16 @@ impl NetChannel {
             // write packet checksum as 0, we will checksum later then restore here
             writer.write_signed(16, 0)?;
 
+            // TODO: create send-side reliable fragments
+
+            // write the reliable state (established in read_data)
+            writer.write_char(self.reliable_state.get())?;
+
             // if we have choked packets, write them here
             if self.choked_num > 0 {
                 // acknowledge choked packets
                 writer.write_char(self.choked_num)?;
             }
-
-            // TODO: create reliable fragments
-            // TODO: reliable state flags
-            writer.write_char(0)?;
 
             // TODO: Padding?
 
@@ -534,9 +542,12 @@ impl NetChannel {
         // calculate and fix the checksum
         self.calc_scratch_checksum()?;
 
+        {
+            trace!("[SEND DATAGRAM]\n {:?}", self.wrapper.borrow().get_scratch().hex_dump());
+        }
+
         // encrypt the packet with the ICE key
         let encrypted = self.encrypt_packet(self.wrapper.borrow_mut().get_scratch_mut())?;
-        println!("{:?}", encrypted.hex_dump());
 
         // send the datagram
         self.wrapper.borrow().send_raw(encrypted.as_slice())?;
@@ -544,15 +555,24 @@ impl NetChannel {
         Ok(())
     }
 
-    fn read_packet_header<'a>(&self, packet_data: &'a [u8]) -> Result<(BitBufReaderType<'a>, NetChannelPacketHeader)>
+    fn read_packet_header(&self, packet_data: &[u8]) -> anyhow::Result<NetChannelPacketHeader>
     {
         let mut reader = BitReader::endian(std::io::Cursor::new(packet_data), LittleEndian);
 
         // incoming sequence number
-        let sequence_in = reader.read_long()?;
+        let mut sequence_in = reader.read_long()?;
+        let decompressed: Vec<u8>;
 
         if sequence_in == NET_HEADER_FLAG_COMPRESSEDPACKET {
-            panic!("Compressed packets not supported yet!");
+            trace!("Compressed packet {} uncompressed", packet_data.len());
+
+            decompressed = Lzss::decode(&packet_data[4..])?;
+
+            // retry this, but this time with the decompressed packet
+            reader = BitReader::endian(std::io::Cursor::new(decompressed.as_slice()), LittleEndian);
+            sequence_in = reader.read_long()?;
+
+            trace!("Decompressed {} bytes from packet", decompressed.len());
         }
         if sequence_in == CONNECTIONLESS_HEADER {
             panic!("Connectionless headers over netchannels not supported yet!");
@@ -582,7 +602,7 @@ impl NetChannel {
 
         // check for packet lag, network duplication
         if sequence_in <= self.in_sequence {
-            println!("Sequence number mismatch (in={}, current={})", sequence_in, self.in_sequence);
+            warn!("Sequence number mismatch (in={}, current={})", sequence_in, self.in_sequence);
             return Err(anyhow::anyhow!("Sequence number mismatch"))
         }
 
@@ -591,32 +611,50 @@ impl NetChannel {
         // is there subchannel info?
         if (flags & PACKET_RELIABLE) != 0
         {
-            let _bits: i8 = reader.read_signed(3)?;
-            for subchan_i in 0..2 {
-                let updated = reader.read_bit()?;
-                if updated {
-                    let mut subchans = self.subchannels.borrow_mut();
-                    let subchan = &mut subchans[subchan_i];
+            // which subchannel is currently sending data?
+            let subchan_i = reader.read::<u8>(3)?;
+            trace!("subchannel[{}] is marked as updated", subchan_i);
 
+            // for each stream in the subchannel,
+            for stream_i in 0..2 {
+                // grab the subchannel object
+                let subchan = &mut (self.subchannels.borrow_mut())[stream_i as usize];
+
+                // check to see if this stream is updated
+                let updated = reader.read_bit()?;
+                trace!("subchannel[{}][stream={}] updated={}", subchan_i, stream_i, updated);
+
+                if updated {
                     // read all incoming subchannel data
                     let err = subchan.read_subchannel_data(&mut reader);
-                    dbg!(&err);
+                    trace!("read_subchannel_data err: {:?}", &err);
                 }
             }
 
-            // TODO: Update reliable state.
-            // TODO: Process subchannel data.
+            // mark this subchannel as being read from by flipping the bit in reliable state
+            let new_state = self.reliable_state.get() ^ (1 << subchan_i);
+            self.reliable_state.set(new_state);
         }
 
         // is there still data left? if so, netmessages will be here
+        // TODO:
 
-        Ok((reader, NetChannelPacketHeader{
+        // if there is still data, there must be messages for us to process
+        let message_number = reader.read_int32_var();
+        if message_number.is_err() {
+            // no netmessages remain
+            trace!("No more net messages");
+        } else {
+            trace!("Message number: {}", message_number?);
+        }
+
+        Ok( NetChannelPacketHeader{
             sequence_ack,
             sequence_in,
             flags,
             checksum: checksum as u16,
             reliable_state,
             choked
-        }))
+        })
     }
 }

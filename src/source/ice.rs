@@ -469,7 +469,6 @@ impl IceEncryption {
     }
 }
 
-use pretty_hex::*;
 #[test]
 fn test() {
     // n=2 test

@@ -1,10 +1,7 @@
-use steamworks::Manager;
 use crate::protoutil;
-use crate::source::BufUdp;
-use crate::source::bitbuf::{BitBufWriterType, WireWriter};
-use anyhow::*;
+use crate::source::bitbuf::{WireWriter};
 use bitstream_io::{BitWriter, LittleEndian};
-use smallvec::{smallvec, SmallVec};
+use smallvec::{SmallVec};
 
 // a netmessage packet, either to be sent or received from the network
 pub struct NetMessage<M>
@@ -58,7 +55,7 @@ impl<M> NetMessage<M>
         // create a stack/heap allocated buffer hopefully to optimize small netmessage encodings
         let mut encode_buf: SmallVec<[u8; 2048]> = SmallVec::with_capacity(self.size as usize);
 
-        let mut cursor = std::io::Cursor::new(buf);
+        let cursor = std::io::Cursor::new(buf);
         let mut writer = BitWriter::endian(cursor, LittleEndian);
 
         // encode the proto message

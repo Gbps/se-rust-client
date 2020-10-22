@@ -9,9 +9,10 @@ use std::cell::{RefCell, Ref, Cell};
 use crc32fast::Hasher;
 use std::io::Cursor;
 use crate::source::netmessages::NetMessage;
-use crate::source::subchannel::{SubChannel};
+use crate::source::subchannel::{SubChannel, TransferBuffer, SubchannelStreamType};
 use log::{trace, warn};
 use crate::source::lzss::Lzss;
+use smallvec::SmallVec;
 
 // implements a buffered udp reader
 pub struct BufUdp
@@ -204,7 +205,7 @@ pub struct NetChannel
 
 /// Header read out of a basic netchannel packet
 #[derive(Debug)]
-struct NetChannelPacketHeader {
+pub struct NetChannelPacketHeader {
     sequence_in: u32,
     sequence_ack: u32,
     flags: u8,
@@ -213,8 +214,77 @@ struct NetChannelPacketHeader {
     choked: u8,
 }
 
+/// A single datagram read off the network
+pub struct NetDatagram {
+    /// The decoded packet header for the datagram
+    pub header: NetChannelPacketHeader,
+
+    /// If this packet contained any netmessages (other than NET_Nop)
+    /// then they will be decoded and put here. Otherwise, None.
+    messages: Option<Vec<NetMessage>>,
+}
+
+impl NetDatagram {
+    /// create a new datagram
+    fn new(
+               sequence_ack: u32,
+               sequence_in: u32,
+               flags: u8,
+               checksum: u16,
+               reliable_state: u8,
+               choked:u8
+            ) -> Self
+    {
+        return Self {
+            header: NetChannelPacketHeader {
+                sequence_in,
+                sequence_ack,
+                flags,
+                checksum,
+                reliable_state,
+                choked,
+            },
+            messages: None,
+        }
+    }
+
+    /// adds a netmessage to this datagram
+    fn add_message(&mut self, message: NetMessage)
+    {
+        // allocate some space if this is our first message
+        if self.messages.is_none() {
+            self.messages = Some(Vec::with_capacity(16))
+        }
+
+        // add message
+        self.messages.as_mut().unwrap().push(message);
+    }
+
+    /// get all netmessages encoded in this packet
+    /// if there are no messages, returns None
+    pub fn get_messages(&self) -> Option<&Vec<NetMessage>>
+    {
+        return self.messages.as_ref();
+    }
+
+    /// add a set of messages to this datagram
+    fn add_messages(&mut self, messages: Vec<NetMessage>)
+    {
+        if messages.len() == 0 {
+            return;
+        }
+
+        // allocate some space if this is our first message
+        if self.messages.is_none() {
+            self.messages = Some(Vec::with_capacity(16))
+        }
+
+        self.messages.as_mut().unwrap().extend(messages)
+    }
+}
+
 impl NetChannel {
-    // get the default channel encryption key
+    /// get the default channel encryption key
     fn get_encryption_key(host_version: u32) -> [u8; 16]
     {
         return [
@@ -237,7 +307,7 @@ impl NetChannel {
         ]
     }
 
-    // upgrade a connectionless channel into a netchannel after authentication is complete
+    /// upgrade a connectionless channel into a netchannel after authentication is complete
     pub fn upgrade(socket: ConnectionlessChannel, host_version: u32) -> Result<Self>
     {
         let encryption_key = NetChannel::get_encryption_key(host_version);
@@ -265,8 +335,8 @@ impl NetChannel {
         })
     }
 
-    // read all of the incoming data from a packet
-    pub fn read_data(&mut self) -> Result<()>
+    /// read all of the incoming data from a packet
+    pub fn read_data(&mut self) -> Result<NetDatagram>
     {
         {
             let mut borrow = self.wrapper.borrow_mut();
@@ -306,16 +376,14 @@ impl NetChannel {
         trace!("[RECV DATAGRAM]: \n{:?}", packet_data.hex_dump());
 
         // process header data, sequence numbers, subchannel data, etc.
-        let header = self.read_packet_header(&packet_data)?;
+        let datagram = self.parse_datagram(&packet_data)?;
 
         // update current sequence number info for this packet
-        self.in_sequence = header.sequence_in;
-        self.out_sequence_ack = header.sequence_ack;
+        self.in_sequence = datagram.header.sequence_in;
+        self.out_sequence_ack = datagram.header.sequence_ack;
 
-        trace!("Header: {:?}\n", &header);
-
-
-        Ok(())
+        trace!("Finished parsing datagram [seq={}, seq_ack={}]", self.in_sequence, self.out_sequence_ack);
+        Ok(datagram)
     }
 
     fn decrypt_packet<'a>(&self, datagram: &'a mut [u8]) -> Result<&'a [u8]>
@@ -348,7 +416,7 @@ impl NetChannel {
         return Ok(packet_data);
     }
 
-    // LE -> BE byteswap
+    /// LE -> BE byteswap
     fn bswap(le_in: u32) -> u32 {
         let mut out: u32 = 0;
         out |= ((le_in >> 24) as u8) as u32;
@@ -358,7 +426,7 @@ impl NetChannel {
         return out;
     }
 
-    // encrypt the datagram and return a reference to the encrypted result
+    /// encrypt the datagram and return a reference to the encrypted result
     fn encrypt_packet(&self, datagram: &mut [u8]) -> Result<Ref<Vec<u8>>>
     {
         {
@@ -405,8 +473,8 @@ impl NetChannel {
         Ok(self.encrypt_buffer.borrow())
     }
 
-    // calculate the CRC32 checksum of the current packet in the scratch buffer and update
-    // the checksum field
+    /// calculate the CRC32 checksum of the current packet in the scratch buffer and update
+    /// the checksum field
     fn calc_scratch_checksum(&self) -> Result<()>
     {
         let shortened_checksum: u16;
@@ -434,7 +502,7 @@ impl NetChannel {
         Ok(())
     }
 
-    // update the checksum field of the current pending internal scratch buffer packet
+    /// update the checksum field of the current pending internal scratch buffer packet
     fn update_scratch_checksum(&self, checksum: u16) -> Result<()> {
         // create a cursor on the internal scratch buffer
         let mut wrapper = self.wrapper.borrow_mut();
@@ -451,9 +519,8 @@ impl NetChannel {
         Ok(())
     }
 
-    // send a netmessage to the server
-    pub fn write_netmessage<M>(&mut self, mut message: NetMessage<M>) -> anyhow::Result<()>
-        where M: ::protobuf::Message
+    /// send a netmessage to the server
+    pub fn write_netmessage(&mut self, mut message: NetMessage) -> anyhow::Result<()>
     {
         // clear to prepare for a new
         self.encode_buffer.clear();
@@ -476,7 +543,7 @@ impl NetChannel {
         Ok(())
     }
 
-    // write a nop packet (no net messages encoded)
+    /// write a nop packet (no net messages encoded)
     pub fn write_nop(&mut self) -> anyhow::Result<()>
     {
         // write to the network
@@ -488,7 +555,7 @@ impl NetChannel {
         Ok(())
     }
 
-    // write the header of the netchannel datagram
+    /// write the header of the netchannel datagram
     pub fn write_datagram(&self, send_buffer: &[u8]) -> Result<()>
     {
         {
@@ -555,7 +622,95 @@ impl NetChannel {
         Ok(())
     }
 
-    fn read_packet_header(&self, packet_data: &[u8]) -> anyhow::Result<NetChannelPacketHeader>
+    /// reads a set of netmessages from a payload
+    fn read_messages<T>(&self, reader: &mut BitReader<T, LittleEndian>) -> anyhow::Result<Vec<NetMessage>>
+        where T: std::io::Read
+    {
+        let mut decode_buf: SmallVec<[u8; 0x1000*2]> = SmallVec::new();
+
+        let mut out_messages: Vec<NetMessage> = Vec::with_capacity(32);
+
+        trace!("--- read_messages() begin ---");
+        loop {
+            // if there is still data, there must be messages for us to process
+            let message_number_e = reader.read_int32_var();
+            let message_id: u32;
+
+            // when we reach EOF, we stop netmessage parsing
+            if message_number_e.is_err() {
+                break;
+            } else {
+                // the message index number, maps to the netmessage enum
+                message_id = message_number_e?;
+            }
+
+            if message_id == 0 {
+                // NOP packet, just ignore
+                continue;
+            }
+
+            // total size of the message
+            let message_size = reader.read_int32_var()? as usize;
+
+            trace!("MESSAGE [id={}, size={}]:", message_id, message_size);
+
+            // allocate either stack or heap data depending on size
+            if message_size > decode_buf.capacity()
+            {
+                decode_buf.reserve(message_size - decode_buf.len());
+            }
+
+            // use unallocated space, don't clear contents
+            unsafe {
+                decode_buf.set_len(message_size);
+            }
+
+            // read the message's data
+            reader.read_bytes(decode_buf.as_mut_slice())?;
+
+            // decode the protobuf message
+            let message = NetMessage::bind(message_id as i32, decode_buf.as_slice());
+            if message.is_err() {
+                warn!("Failed decoding netmessage [id={}]: {}", message_id, message.err().unwrap());
+                continue;
+            }
+
+            let message = message.unwrap();
+
+            trace!("Successfully decoded \"{}\" (id={}, size={}) message", message.get_type_name(), message_id, message_size);
+
+            // return this message
+            out_messages.push(message);
+        }
+
+        // no more netmessages in this packet
+        trace!("--- read_messages() end [{} messages read] ---", out_messages.len());
+        return Ok(out_messages);
+    }
+
+    /// when a payload is received over a subchannel stream, process its data here
+    fn process_subchannel_payload(&self, transfer: TransferBuffer, stream_index: SubchannelStreamType, out_datagram: &mut NetDatagram) -> anyhow::Result<()>
+    {
+        // unwrap the full subchannel payload
+        let payload = transfer.unwrap_payload();
+
+        // convert it to a bit reader
+        let mut reader = BitReader::endian(std::io::Cursor::new(payload), LittleEndian);
+
+        // read the message/file inside
+        match stream_index {
+            // the message stream sends payloads that contain large, reliably sent groups of netmessages
+            SubchannelStreamType::Message => out_datagram.add_messages(self.read_messages(&mut reader)?),
+            SubchannelStreamType::File => panic!("File transfers not implemented yet!"),
+            _ => ()
+        }
+
+        Ok(())
+    }
+
+    /// parses datagram header and body values
+    /// parses netmessages from the packet and returns it in the NetDatagram packet
+    fn parse_datagram(&self, packet_data: &[u8]) -> anyhow::Result<NetDatagram>
     {
         let mut reader = BitReader::endian(std::io::Cursor::new(packet_data), LittleEndian);
 
@@ -564,16 +719,20 @@ impl NetChannel {
         let decompressed: Vec<u8>;
 
         if sequence_in == NET_HEADER_FLAG_COMPRESSEDPACKET {
-            trace!("Compressed packet {} uncompressed", packet_data.len());
+            trace!("Compressed datagram, {} uncompressed", packet_data.len());
 
+            // decompress the LZSS payload
             decompressed = Lzss::decode(&packet_data[4..])?;
 
             // retry this, but this time with the decompressed packet
             reader = BitReader::endian(std::io::Cursor::new(decompressed.as_slice()), LittleEndian);
+
+            // re-read the first value of the packet now that it's decompressed
             sequence_in = reader.read_long()?;
 
-            trace!("Decompressed {} bytes from packet", decompressed.len());
+            trace!("Decompressed {} bytes from datagram", decompressed.len());
         }
+
         if sequence_in == CONNECTIONLESS_HEADER {
             panic!("Connectionless headers over netchannels not supported yet!");
         }
@@ -606,6 +765,16 @@ impl NetChannel {
             return Err(anyhow::anyhow!("Sequence number mismatch"))
         }
 
+        // create the datagram struct to return to caller
+        let mut out_datagram = NetDatagram::new(
+            sequence_ack,
+            sequence_in,
+            flags,
+            checksum as u16,
+            reliable_state,
+            choked,
+        );
+
         // TODO: Subchannel bits
 
         // is there subchannel info?
@@ -626,8 +795,15 @@ impl NetChannel {
 
                 if updated {
                     // read all incoming subchannel data
-                    let err = subchan.read_subchannel_data(&mut reader);
-                    trace!("read_subchannel_data err: {:?}", &err);
+                    let buf = subchan.read_subchannel_data(&mut reader)?;
+
+                    // has a subchannel transfer completed?
+                    if buf.is_some()
+                    {
+                        // we received a full payload, processes it depending on what subchannel stream we're
+                        // receiving from
+                        self.process_subchannel_payload(buf.unwrap(), SubchannelStreamType::from(stream_i), &mut out_datagram)?;
+                    }
                 }
             }
 
@@ -636,25 +812,12 @@ impl NetChannel {
             self.reliable_state.set(new_state);
         }
 
-        // is there still data left? if so, netmessages will be here
-        // TODO:
+        // is there still data left in the packet? if so, netmessages will be parsed here here
+        let messages = self.read_messages(&mut reader)?;
 
-        // if there is still data, there must be messages for us to process
-        let message_number = reader.read_int32_var();
-        if message_number.is_err() {
-            // no netmessages remain
-            trace!("No more net messages");
-        } else {
-            trace!("Message number: {}", message_number?);
-        }
+        // add any parsed messages to the datagram object
+        out_datagram.add_messages(messages);
 
-        Ok( NetChannelPacketHeader{
-            sequence_ack,
-            sequence_in,
-            flags,
-            checksum: checksum as u16,
-            reliable_state,
-            choked
-        })
+        Ok(out_datagram)
     }
 }

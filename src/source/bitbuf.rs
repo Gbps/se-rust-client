@@ -25,28 +25,24 @@ impl<T> WireReader for BitReader<T, LittleEndian>
     where T: std::io::Read
 {
     // read a little endian long from the stream
-    #[inline]
     fn read_long(&mut self) -> Result<u32>
     {
         Ok(self.read::<u32>(32)?)
     }
 
     // read a little endian longlong from the stream
-    #[inline]
     fn read_longlong(&mut self) -> Result<u64>
     {
         Ok(self.read::<u64>(64)?)
     }
 
     // read a little endian long from the stream
-    #[inline]
     fn read_word(&mut self) -> Result<u16>
     {
         Ok(self.read::<u16>(16)?)
     }
 
     // read a single byte from the stream
-    #[inline]
     fn read_char(&mut self) -> Result<u8>
     {
         Ok(self.read::<u8>(8)?)
@@ -80,10 +76,9 @@ impl<T> WireReader for BitReader<T, LittleEndian>
     }
 
     /// source engine variable length 32-bit int encoding
-    #[inline]
     fn read_int32_var(&mut self) -> Result<u32>
     {
-        let data: u8 = self.read_char()?;
+        let mut data: u8;
         let mut res: u32 = 0;
         let mut count: u32 = 0;
 
@@ -91,12 +86,13 @@ impl<T> WireReader for BitReader<T, LittleEndian>
         {
             // maximum encoded bytes
             if count == 5 {
-                return Ok(res);
+                return Err(anyhow::anyhow!("Invalid varint32 encoding!"));
             }
 
+            data = self.read_char()?;
             res |= ((data & 0x7F) as u32) << (7 * count);
             count += 1;
-            if (data & 0x80) != 0 {
+            if (data & 0x80) == 0 {
                 break;
             }
         }
@@ -192,3 +188,4 @@ impl<T> WireWriter for BitWriter<T, LittleEndian>
         Ok(())
     }
 }
+

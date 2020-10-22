@@ -1,10 +1,35 @@
 use bitstream_io::{BitReader, LittleEndian};
 use crate::source::bitbuf::WireReader;
 use log::{warn, trace};
+use crate::source::lzss::Lzss;
+use pretty_hex::PrettyHex;
 
 const MAX_FILE_SIZE: usize = (1<<26) - 1;
 const FRAGMENT_SIZE: usize = 1<<8;
 
+pub enum SubchannelStreamType
+{
+    // reliable messages
+    Message = 0,
+
+    // file transfers
+    File = 1,
+
+    // invalid subchannel type
+    Invalid = 2,
+}
+
+impl From<u8> for SubchannelStreamType
+{
+    fn from(num: u8) -> Self
+    {
+        match num {
+            0 => SubchannelStreamType::Message,
+            1 => SubchannelStreamType::File,
+            _ => SubchannelStreamType::Invalid,
+        }
+    }
+}
 
 // compressed fragment information, if compressed
 struct CompressedFragments {
@@ -22,7 +47,7 @@ struct FileFragments {
 }
 
 // a current in-progress transfer
-struct TransferBuffer {
+pub struct TransferBuffer {
     // the buffer holding current transfer data
     buffer: Vec<u8>,
 
@@ -57,12 +82,6 @@ pub struct SubChannel
 }
 
 impl TransferBuffer {
-    // returns the number of acknowledged fragments
-    pub fn get_num_acknowledged(&self) -> usize
-    {
-        return self.num_fragments_ack;
-    }
-
     // create a new transfer buffer to receive incoming data
     fn new(transfer_size: usize) -> Self {
 
@@ -140,6 +159,37 @@ impl TransferBuffer {
         // transfer not complete yet
         return Ok(false)
     }
+
+    // decompress an LZSS payload and replace the buffer with the decompressed one on success
+    fn decompress_payload(&mut self, expected_length: usize) -> anyhow::Result<()>
+    {
+        trace!("Payload BEFORE decompress (len={}):\n{:?}", self.buffer.len(), self.buffer.hex_dump());
+
+        // decompress the result
+        let decompressed = Lzss::decode(&self.buffer[..])?;
+
+        trace!("Payload AFTER decompress (len={}):\n{:?}", decompressed.len(), decompressed.hex_dump());
+
+        // check that the expected length matches (despite there also being a separate length
+        // in the lzss header)
+        if decompressed.len() != expected_length
+        {
+            return Err(anyhow::anyhow!("Decompressed data length mismatch from fragment transfer"));
+        }
+
+        // reassign the buffer with our new output
+        self.buffer = decompressed;
+
+        Ok(())
+    }
+
+    // get the final payload once the transfer is complete
+    pub fn unwrap_payload(self) -> Vec<u8>
+    {
+        assert_eq!(self.num_fragments, self.num_fragments_ack);
+
+        return self.buffer;
+    }
 }
 
 impl SubChannel {
@@ -213,11 +263,29 @@ impl SubChannel {
         Ok(())
     }
 
+    // called when a full payload has been received and needs to be processed before returning
+    fn complete_transfer(&mut self) -> anyhow::Result<TransferBuffer>
+    {
+        if let Some(data) = &self.compressed {
+            trace!("Fragments were LZSS compressed, decompressing... (uncompressed_size={})", data.uncompressed_size);
+
+            // if this is a compressed payload, decompress it here
+            self.transfer.as_mut().unwrap().decompress_payload(data.uncompressed_size)?;
+
+            trace!("Fragments successfully decompressed");
+        }
+
+        let transfer_out = self.transfer.take().unwrap();
+
+        // return the completed transfer
+        return Ok(transfer_out);
+    }
     // read all of the SubChannel data for this SubChannel from the network
-    pub fn read_subchannel_data<T>(&mut self, reader: &mut BitReader<T, LittleEndian>) -> anyhow::Result<()>
+    // when the transfer is complete, returns Some(TransferBuffer) which contains the completed payload
+    pub fn read_subchannel_data<T>(&mut self, reader: &mut BitReader<T, LittleEndian>) -> anyhow::Result<Option<TransferBuffer>>
         where T: std::io::Read
     {
-        trace!("Begin read_SubChannel_data");
+        trace!("Begin read_subchannel_data");
 
         // position in the overall fragment buffer we're writing to
         let mut start_frag: usize = 0;
@@ -228,7 +296,6 @@ impl SubChannel {
         // is it a single chunk of data?
         let single = !(reader.read_bit()?);
 
-        trace!("single: {}", single);
         // is it not a single block of data? if so, we need to start buffering the payload
         if !single
         {
@@ -295,23 +362,25 @@ impl SubChannel {
             trace!("Continuing existing transfer...");
         }
 
+        let mut complete: bool = false;
+
         // check for no transfer, but we're somehow receiving transfer data
         if let None = &self.transfer {
             return Err(anyhow::anyhow!("Received fragment but no transfer pending"));
         }else if let Some(transfer) = &mut self.transfer {
             // read the actual bytes off the network
-            let complete = transfer.read_fragments(start_frag, num_frags, reader)?;
+            complete = transfer.read_fragments(start_frag, num_frags, reader)?;
 
             // if we're still here, we received this chunk, flip the reliable state bit to ack
             // on the other end
             self.in_reliable_state = !self.in_reliable_state;
-
-            if complete {
-                warn!("Clearing buffer since we're not doing anything useful yet.");
-                self.transfer = None;
-            }
         }
 
-        Ok(())
+        // has the full payload been received? if so, return the payload up.
+        if complete {
+            return Ok(Some(self.complete_transfer()?));
+        }
+
+        Ok(None)
     }
 }

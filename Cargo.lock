@@ -562,6 +562,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bitstream-io",
+ "byteorder",
  "crc32fast",
  "csgogcprotos",
  "enum_dispatch",

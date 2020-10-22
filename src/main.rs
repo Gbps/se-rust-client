@@ -16,7 +16,7 @@ use source::NetChannel;
 use std::net::{UdpSocket, IpAddr};
 use crate::source::netmessages::NetMessage;
 use crate::source::protos::NET_Messages;
-use log::{info, debug};
+use log::{info, debug, trace};
 
 fn run() -> anyhow::Result<()>
 {
@@ -145,22 +145,26 @@ fn run() -> anyhow::Result<()>
     info!("Successfully established a netchannel.");
 
     let mut channel = NetChannel::upgrade(stream, chal.host_version)?;
-
-    channel.read_data()?;
-
     let mut signon = source::protos::CNETMsg_SignonState::new();
     signon.set_signon_state(2);
 
-    let msg = NetMessage::from_proto(signon, NET_Messages::net_SignonState as u32);
+    let msg = NetMessage::from_proto(Box::new(signon), NET_Messages::net_SignonState as i32);
     let err = channel.write_netmessage(msg);
     debug!("Packet result: {:?}", &err);
 
     loop{
         // read incoming data
-        channel.read_data()?;
+        let datagram = channel.read_data()?;
+        if let Some(messages) = datagram.get_messages()
+        {
+            for msg in messages.into_iter()
+            {
+                trace!("* {}", msg.get_type_name());
+            }
+        }
 
         // blank message just to keep the other side updated
-        channel.write_nop();
+        channel.write_nop()?;
     }
     //::std::thread::sleep(std::time::Duration::from_millis(10000));
     //Ok(())

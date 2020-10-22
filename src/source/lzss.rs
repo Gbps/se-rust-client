@@ -1,12 +1,10 @@
 use anyhow::Result;
-use bitstream_io::{BitReader, LittleEndian};
-use std::io::{Cursor};
 use std::fmt;
+use byteorder::{ReadBytesExt, LittleEndian};
 
 #[derive(Debug)]
 pub enum LzssError
 {
-    None,
     InvalidHeader,
     BadData,
     SizeMismatch,
@@ -25,7 +23,6 @@ impl fmt::Display for LzssError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self
         {
-            LzssError::None => write!(f, "LzssError::None"),
             LzssError::InvalidHeader => write!(f, "Invalid header in LZSS compressed data"),
             LzssError::BadData => write!(f, "Invalid compressed data"),
             LzssError::SizeMismatch => write!(f, "Compressed data was not of expected size"),
@@ -49,38 +46,47 @@ const LZSS_HEADER: u32 = (('S' as u32)<<24) | (('S' as u32)<<16) | (('Z' as u32)
 
 impl Lzss
 {
-    pub fn decode(input: &[u8]) -> Result<Vec<u8>, LzssError>
+    pub fn decode(mut input: &[u8]) -> Result<Vec<u8>, LzssError>
     {
-        let mut reader = BitReader::endian(Cursor::new(input), LittleEndian);
-
         // ensure proper LZSS header
-        let header: u32 = reader.read(32)?;
+        let header: u32 = input.read_u32::<LittleEndian>()?;
         if header != LZSS_HEADER {
             return Err(LzssError::InvalidHeader);
         }
 
-        // get the supposed "actual size"
-        let actual_size: usize = reader.read::<u32>(32)? as usize;
+        // get the supposed "actual size" to verify at the end
+        let actual_size: usize = input.read_u32::<LittleEndian>()? as usize;
+
+        // pre-allocate the actual size (errors if we go over this)
         let mut output: Vec<u8> = Vec::with_capacity(actual_size);
+
+        // keep track of beginning and end of the vector as pointers for raw ptr writes
+        let mut out_ptr = output.as_mut_ptr();
+        let out_ptr_end: *mut u8;
+        unsafe {
+            out_ptr_end = out_ptr.add(output.capacity())
+        }
 
         let mut get_cmd_byte: u8 = 0;
         let mut cmd_byte: u8 = 0;
-
         loop {
+            // is it time to read a new command byte?
             if get_cmd_byte == 0 {
-                cmd_byte = reader.read::<u8>(8)?;
+                cmd_byte = input.read_u8()?;
             }
 
+            // read a command byte every 8 bytes
             get_cmd_byte = (get_cmd_byte + 1) & 0x07;
 
+            // if this is a command byte?
             if (cmd_byte & 1) != 0 {
-                let pos_byte = reader.read::<u8>(8)?;
+                let pos_byte: usize = input.read_u8()? as usize;
 
                 // the position of the reference
                 let mut position = pos_byte << 4;
 
                 // the size of the reference
-                let count_byte = reader.read::<u8>(8)?;
+                let count_byte: usize = input.read_u8()? as usize;
 
                 position |= count_byte >> 4;
 
@@ -92,25 +98,54 @@ impl Lzss
                     break;
                 }
 
-                // verify slice targets
-                let target_index = (output.len() - 1) - (position as usize);
-                let target_index_end = target_index + (count as usize);
-
-                // check if we're referencing too far back or too far forward
-                if target_index > output.len() || target_index_end > actual_size
-                {
-                    return Err(LzssError::BadData);
-                }
+                // calculate range of the copy from the previously uncompressed data
+                let target_index = (output.len() - 1) - position;
+                let target_index_end = target_index + count;
 
                 // copy the reference into output, bytewise since we can't assume
                 // a full memcpy due to overlap
                 for idx in target_index..target_index_end
                 {
+                    // check for bad access
+                    if idx >= output.len(){
+                        return Err(LzssError::BadData);
+                    }
+
                     output.push(output[idx]);
+
+                    // keep incrementing output pointer for new item
+                    unsafe {
+                        out_ptr = out_ptr.add(1);
+                    }
                 }
             } else {
-                // copy a single byte
-                output.push(reader.read::<u8>(8)?);
+                // otherwise, this is not a command byte but a regular byte of data
+                // copy it to output
+
+                // check for writing past bounds
+                if out_ptr == out_ptr_end
+                {
+                    break;
+                }
+
+                // hot path for copying non-compressed bytes to output
+                // instead of using output.push. We do raw pointer read/write
+                // which increases perf of this loop by up to 4x due to
+                // lack of bounds checking and error handling
+                unsafe {
+                    // read input byte and shift input slice
+                    let byt = input.as_ptr().read();
+                    input = &input[1..];
+
+                    // write byte to output
+                    std::ptr::write(out_ptr, byt);
+
+                    // increment output pointer for next write
+                    out_ptr = out_ptr.add(1);
+
+                    // increase length of vector by 1 more item
+                    output.set_len(output.len() + 1);
+                }
             }
 
             cmd_byte >>= 1;

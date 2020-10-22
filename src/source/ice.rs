@@ -299,9 +299,9 @@ impl IceEncryption {
                 lr = self.decrypt_block_inplace_prepare(block);
             }
 
-            // scratch space to decrypt to
-            let scratch_block = &mut buffer[start_pos..end_pos];
-            self.decrypt_block_inplace(lr, scratch_block);
+            // slice of the block to decrypt to
+            let target_block = &mut buffer[start_pos..end_pos];
+            self.decrypt_block_inplace(lr, target_block);
         }
     }
 

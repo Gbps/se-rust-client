@@ -1,5 +1,22 @@
 # WIP WIP WIP WIP
 
+# It does work!
+
+A full game authentication is performed with Steam's GC as well as the game server itself. Net messages have been successfully sent and received with a community game server.
+
+```
+ TRACE se_client::source::subchannel > Fragments successfully decompressed
+ TRACE se_client::source::channel    > --- read_messages() begin ---
+ TRACE se_client::source::channel    > MESSAGE [id=16, size=113]: <-- svc_Print
+ TRACE se_client::source::channel    > MESSAGE [id=34, size=518]: <-- svc_CmdKeyValues
+ TRACE se_client::source::channel    > MESSAGE [id=8, size=114]: <-- svc_ServerInfo
+ TRACE se_client::source::channel    > MESSAGE [id=4, size=8]: <-- net_Tick
+ TRACE se_client::source::channel    > MESSAGE [id=12, size=2630]: <-- svc_CreateStringTable
+  TRACE se_client::source::channel    > MESSAGE [id=12, size=12502]: <-- svc_CreateStringTable
+   TRACE se_client::source::channel    > MESSAGE [id=12, size=34]: <-- svc_CreateStringTable
+    TRACE se_client::source::channel    > MESSAGE [id=12, size=43067]: <-- svc_CreateStringTable
+```
+
 # Emulating a source client signon
 
 Source engine's signon process has gotten significantly more complicated over the years as CS:GO has transitioned to matchmaking rather than direct IP connection. In addition, the invention of Steam Game Sockets means that now the traffic that's being communicated between the client and the server is being proxied over a relay network embedded in the Steam backbone.
@@ -321,4 +338,86 @@ So most of my time implementing subchannels is learning how fragments actually w
   * Basically, you can think of these like 8 simultaneous transfers, where each individual transfer can mark itself as completed when it's received
   * This is because UDP is not a reliable protocol, so out of order and lost fragments need to be marked and recovered from.
 * When sending over a set of, for example, 4 fragments (fragment size = 256, total size = 1024), it will send over a free subchannel (starts at 0). Then when the receiver gets it, it will mark the 0th index bit in its `reliable_state` on its next packet it sends off. Then, when the sender sends the next 4 fragments, it will send it over the next free subchannel (index 1). This will repeat with the sender rotating the free subchannels and the receiver flipping the bit in the reliable state.
+
+# Signon: CONNECTED -> NEW
+
+So, now that we've authenticated and connected and formed a netchannel, the first thing the client must do is send a set signon message to set the signon to `CONNECTED`. This initiates the server to send the set of reliable netmessages to get the player ready to spawn in on their side.
+
+Here are all of the messages sent in the reliable (subchannel) buffer:
+
+* svc_Print - Prints some general info about the server to the client's console:
+
+  * ```
+    Counter-Strike: Global Offensive
+    Map: de_dust2
+    Players: 1 (0 bots) / 20 humans
+    Build: 8012
+    Server Number: 88
+    ```
+
+* svc_CmdKeyValues - `TODO`
+
+* svc_ServerInfo - Contains info about the entity classes and some additional things like the map name and skybox name. Mostly just misc things.
+
+  * ```
+     Server Info: protocol: 13770 server_count: 88 is_dedicated: true is_hltv: false is_redirecting_to_proxy_relay: false c_os: 119 map_crc: 282161188 client_crc: 1473533612 string_table_crc: 0 max_clients: 64 max_classes: 283 player_slot: 0 tick_interval: 0.015625 game_dir: "csgo" map_name: "de_dust2" map_group_name: "" sky_name: "nukeblank" host_name: "Counter-Strike: Global Offensive" ugc_map_id: 0
+    ```
+
+* net_Tick - Synchronize the server's tick count
+
+* net_SetConVar - A message containing all of the replicated convars set by the server:
+
+  * ```
+     DEBUG se_client::source::gamelogic  > Set ConVar: [name=bot_autodifficulty_threshold_high] [value=0]
+     DEBUG se_client::source::gamelogic  > Set ConVar: [name=cash_team_win_by_defusing_bomb] [value=2700]
+     [...]
+    ```
+
+* svc_CreateStringTable - a create string table message for each of the string tables on the server, including its data
+
+  * downloadables
+  * modelprecache
+  * genericprecache
+  * soundprecache
+  * decalprecache
+  * instancebaseline
+  * lightstyles
+  * userinfo
+  * dynamicmodel
+  * server_query_info
+  * ExtraParticleFilesTable
+  * ParticleEffectNames
+  * EffectDispatch
+  * VguiScreen
+  * Materials
+  * InfoPanel
+  * Scenes
+  * Movies
+  * GameRulesCreation
+
+* svc_SignonState - Sets the client's signon state from CONNECTED to NEW.
+
+# Signon (client): CONNECTED (old) -> NEW (new)
+
+When the above finishes, next the client calls `SendClientInfo` which constructs a `CCLCMsg_ClientInfo` to send to the server. Fields here include:
+
+- the SendTable CRC
+- The "server count" (kind of like a uid for this particular attempt to connect)
+- is_hltv
+- is_replay
+- friends id (from steam)
+- friends name (from steam)
+- any custom files (sprays)
+
+Then the client sends a `net_SignonState` for `NEW` containing the spawn_count from the last `net_SignonState` received. This must always be sent on new signon updates, else the server will force a reconnect.
+
+Unfortunately, there is no good way to calculate the send tables CRC on the client.
+
+# Signon (server): NEW (old) -> PRESPAWN (new)
+
+Server verifies the class tables CRC to match its own. If it's invalid (aka the client binary is out of date) it will disconnect with `Server uses different class tables`. This is what spawned me to write the `crcgrab.exe` project which signature scans for the class table crc value and then ReadProcessMemory's it from a real csgo.exe instance.
+
+Server sends the signon data buffer to the client. This signon data is the same thing sent to all clients. It consists of every call to `BroadcastMessage` with `IsInitMessage` set made by the server during this map load. This catches up the client to everything that happened. I am not convinced there are any packets marked with `FLAG_INIT_MESSAGE` right now in the engine.
+
+The server sends a signon state `PRESPAWN` to client.
 

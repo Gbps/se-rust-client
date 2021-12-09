@@ -307,3 +307,18 @@ Here's the format:
 -> Reservation cookie 9a2a387bc911bda3:  reason [R] Connect from 192.168.1.100:27005
 ```
 
+## On Fragments
+So most of my time implementing subchannels is learning how fragments actually work. Here's what I've learned so far:
+
+* There are 8 subchannels and 2 streams.
+* A stream is either a message (default) steam (index=0) or a file stream (index=1).
+* A message stream sends reliable netmessages (large)
+* In this case, I believe it's sending the server info and delta updates to us all at once
+* The message stream being sent to me has been compressed at the fragment level. Basically LZSS compression is done on the entire payload prior to starting the send. At the beginning of the start of a new transfer on a stream, the sending end alerts the receiving end of the uncompressed and compressed sizes, then starts to send the compressed data in fragments.
+* Fragments are 256 byte chunks of data of the overall payload. Can think of the total payload as being split up into these fragment chunks. So rather than transferring to 
+* A subchannel is a single instance of a set of fragments being sent. There are 8 of them, one bit to fill the byte in the header. 
+  * 
+  * Basically, you can think of these like 8 simultaneous transfers, where each individual transfer can mark itself as completed when it's received
+  * This is because UDP is not a reliable protocol, so out of order and lost fragments need to be marked and recovered from.
+* When sending over a set of, for example, 4 fragments (fragment size = 256, total size = 1024), it will send over a free subchannel (starts at 0). Then when the receiver gets it, it will mark the 0th index bit in its `reliable_state` on its next packet it sends off. Then, when the sender sends the next 4 fragments, it will send it over the next free subchannel (index 1). This will repeat with the sender rotating the free subchannels and the receiver flipping the bit in the reliable state.
+

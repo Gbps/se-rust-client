@@ -1,6 +1,5 @@
-# WIP WIP WIP WIP
-
-# It does work!
+# Proof of Concept Rust Source Engine Client
+## No longer being updated or worked on.
 
 A full game authentication is performed with Steam's GC as well as the game server itself. Net messages have been successfully sent and received with a community game server.
 
